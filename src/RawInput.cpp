@@ -50,10 +50,34 @@ bool ButtonCapsMatch(const HIDP_BUTTON_CAPS& caps, USAGE page, USAGE usage) {
     return caps.NotRange.Usage == usage;
 }
 
+// The raw HID interface path is unreadable in a UI; keep the interesting
+// middle part ("VEN_0488 Col02").
+std::wstring CompactDeviceName(const std::wstring& name) {
+    const std::wstring marker = L"HID#";
+    std::size_t start = name.find(marker);
+    if (start == std::wstring::npos) {
+        return name;
+    }
+    start += marker.size();
+
+    const std::size_t end = name.find(L'#', start);
+    std::wstring compact =
+        name.substr(start, end == std::wstring::npos ? std::wstring::npos : end - start);
+    for (wchar_t& character : compact) {
+        if (character == L'&') {
+            character = L' ';
+        }
+    }
+    return compact;
+}
+
 } // namespace
 
 RawInputSource::RawInputSource(Callbacks callbacks)
-    : callbacks_(std::move(callbacks)) {}
+    : callbacks_(callbacks),
+      tracker_(ContactTracker::Callbacks{
+          callbacks_.onContactDown, callbacks_.onContactMove, callbacks_.onContactUp,
+          callbacks_.onCancel}) {}
 
 RawInputSource::~RawInputSource() {
     Unregister();
@@ -105,7 +129,7 @@ bool RawInputSource::Register(HWND target, DigitizerDevices devices) {
 }
 
 void RawInputSource::Unregister() {
-    CancelActive();
+    tracker_.Reset();
 
     if (registered_) {
         // Removing a registration that was never made is harmless.
@@ -171,9 +195,7 @@ void RawInputSource::HandleRawInput(HRAWINPUT rawInput) {
 
 void RawInputSource::HandleDeviceChange(WPARAM change, HANDLE device) {
     if (change == GIDC_REMOVAL) {
-        if (activeDevice_ == device) {
-            CancelActive();
-        }
+        tracker_.DeviceRemoved(device);
         devices_.erase(device);
     }
 }
@@ -392,79 +414,43 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
     }
 
     // ------------------------------------------------------------------
-    // Gesture lifecycle.
+    // Gesture lifecycle.  The rules live in ContactTracker so they are unit
+    // tested without a touchpad attached.
     // ------------------------------------------------------------------
-    if (contact == hid::Contact::Multiple) {
-        CancelActive();
-        return;
-    }
-
-    if (contact == hid::Contact::Up) {
-        if (activeDevice_ == deviceHandle) {
-            activeDevice_ = nullptr;
-            if (callbacks_.onContactUp) {
-                callbacks_.onContactUp();
-            }
-        }
-        device.blocked = false;
-        return;
-    }
-
-    if (contact == hid::Contact::Unknown && !hasPosition) {
-        // A digitizer without a tip switch signals release by omitting the
-        // position entirely.
-        if (!device.hasTipSwitch) {
-            if (activeDevice_ == deviceHandle) {
-                activeDevice_ = nullptr;
-                if (callbacks_.onContactUp) {
-                    callbacks_.onContactUp();
-                }
-            }
-            device.blocked = false;
-        }
-        return;
-    }
-
-    if (!hasPosition) {
-        // Tip is down but this report carries no coordinates (for example a
-        // button-only report).  Wait for the next contact report.
-        return;
-    }
-
-    // After a multi-finger report, wait for every contact to lift before
-    // starting a new one-finger gesture.
-    if (device.blocked) {
-        return;
-    }
-
-    if (activeDevice_ != nullptr && activeDevice_ != deviceHandle) {
-        return;
-    }
-
-    if (activeDevice_ == nullptr) {
-        activeDevice_ = deviceHandle;
-        if (callbacks_.onContactDown) {
-            callbacks_.onContactDown(normalizedX, normalizedY);
-        }
-    } else if (callbacks_.onContactMove) {
-        callbacks_.onContactMove(normalizedX, normalizedY);
-    }
+    ContactSample sample;
+    sample.contact = contact;
+    sample.hasPosition = hasPosition;
+    sample.x = normalizedX;
+    sample.y = normalizedY;
+    sample.reportsTipSwitch = device.hasTipSwitch;
+    tracker_.Feed(deviceHandle, sample);
 }
 
-void RawInputSource::CancelActive() {
-    if (activeDevice_ == nullptr) {
-        return;
+std::wstring RawInputSource::DescribeDevices() const {
+    if (devices_.empty()) {
+        return L"Waiting for a touchpad or touchscreen report...";
     }
 
-    const auto found = devices_.find(activeDevice_);
-    if (found != devices_.end()) {
-        found->second->blocked = true;
+    std::wstring summary;
+    int digitizers = 0;
+    for (const auto& entry : devices_) {
+        if (!entry.second->isDigitizer) {
+            continue;
+        }
+        ++digitizers;
+        if (!summary.empty()) {
+            summary += L", ";
+        }
+        summary += CompactDeviceName(entry.second->name);
     }
-    activeDevice_ = nullptr;
 
-    if (callbacks_.onCancel) {
-        callbacks_.onCancel();
+    if (digitizers == 0) {
+        return L"No absolute digitizer is reporting.";
     }
+
+    wchar_t prefix[64]{};
+    swprintf(prefix, std::size(prefix), L"%d digitizer(s): ", digitizers);
+    return std::wstring(prefix) + summary;
 }
 
 } // namespace st

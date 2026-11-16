@@ -81,6 +81,16 @@ void ActionDispatcher::SetBrightnessPercent(int percent) {
     }
 }
 
+void ActionDispatcher::SetBrightnessTargets(BrightnessTargets targets) {
+    brightness_->SetTargets(targets);
+}
+
+void ActionDispatcher::SetOsdShowPercentage(bool show) {
+    if (osd_) {
+        osd_->SetShowPercentage(show);
+    }
+}
+
 void ActionDispatcher::PressVirtualKey(unsigned int virtualKey) {
     INPUT inputs[2]{};
     inputs[0].type = INPUT_KEYBOARD;

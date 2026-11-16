@@ -2,6 +2,7 @@
 
 #include <windows.h>
 
+#include <atomic>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include "Feedback.h"
+#include "SettingsTypes.h"
 
 namespace st {
 
@@ -30,12 +32,17 @@ public:
     // applied, and bursts are coalesced on the worker thread.
     void SetTargetPercent(int percent);
 
+    // Which displays the edge drives.  Safe to call from the UI thread while
+    // the worker is applying a value.
+    void SetTargets(BrightnessTargets targets);
+
 private:
     struct Monitor {
         HANDLE handle = nullptr;
         DWORD minimum = 0;
         DWORD current = 0;
         DWORD maximum = 100;
+        bool isPrimary = false;
         std::wstring description;
     };
 
@@ -53,7 +60,7 @@ private:
     // Applies the value to every backend and returns the level the user can
     // actually see, or nullopt when no backend accepted it.
     std::optional<LevelFeedback> Apply(int percent);
-    bool ApplyDdc(int percent, int& effectivePercent);
+    bool ApplyDdc(int percent, BrightnessTargets targets, int& effectivePercent);
     bool ApplyWmi(int percent);
 
     LevelFeedbackFn onApplied_;
@@ -62,6 +69,8 @@ private:
     std::mutex mutex_;
     std::condition_variable condition_;
     int pendingPercent_ = -1;
+    std::atomic<BrightnessTargets> targets_{BrightnessTargets::All};
+    HMONITOR primaryMonitor_ = nullptr;
 
     bool comReady_ = false;
     bool backendWarningLogged_ = false;

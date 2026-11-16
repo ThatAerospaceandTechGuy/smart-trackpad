@@ -2,6 +2,8 @@
 
 #include "Log.h"
 #include "Resources.h"
+#include "Strings.h"
+#include "WindowNames.h"
 
 #include <shellapi.h>
 
@@ -12,7 +14,7 @@
 namespace st {
 namespace {
 
-constexpr wchar_t kClassName[] = L"SmartTrackpadTrayWindow";
+constexpr const wchar_t* kClassName = kControlWindowClassName;
 
 } // namespace
 
@@ -28,6 +30,7 @@ bool TrayIcon::Create(HINSTANCE instance, const std::wstring& title,
     title_ = title;
     callbacks_ = std::move(callbacks);
     taskbarCreated_ = RegisterWindowMessageW(L"TaskbarCreated");
+    commandMessage_ = RegisterWindowMessageW(kCommandMessageName);
 
     WNDCLASSEXW windowClass{};
     windowClass.cbSize = sizeof(windowClass);
@@ -35,6 +38,7 @@ bool TrayIcon::Create(HINSTANCE instance, const std::wstring& title,
     windowClass.hInstance = instance;
     windowClass.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     windowClass.lpszClassName = kClassName;
+    windowClass.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
 
     if (!RegisterClassExW(&windowClass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
         LogFormat(LogLevel::Warning, L"Tray: RegisterClassEx failed (error %lu).",
@@ -59,6 +63,7 @@ bool TrayIcon::Create(HINSTANCE instance, const std::wstring& title,
     if (icon_ == nullptr) {
         icon_ = LoadIconW(nullptr, IDI_APPLICATION);
     }
+
     BuildTooltip();
     AddOrUpdateIcon(true);
     return true;
@@ -70,6 +75,10 @@ void TrayIcon::SetEnabled(bool enabled) {
     if (hwnd_ != nullptr) {
         AddOrUpdateIcon(false);
     }
+}
+
+void TrayIcon::SetStartWithWindows(bool enabled) {
+    startWithWindows_ = enabled;
 }
 
 void TrayIcon::Remove() {
@@ -89,7 +98,8 @@ void TrayIcon::Remove() {
 }
 
 void TrayIcon::BuildTooltip() {
-    tooltip_ = title_ + (enabled_ ? L" - enabled" : L" - disabled");
+    tooltip_ = title_ + L" - " +
+               LoadString(enabled_ ? IDS_TRAY_ENABLED : IDS_TRAY_DISABLED);
 }
 
 void TrayIcon::AddOrUpdateIcon(bool add) {
@@ -114,6 +124,10 @@ void TrayIcon::AddOrUpdateIcon(bool add) {
 
     if (succeeded) {
         added_ = true;
+        if (add) {
+            LogFormat(LogLevel::Info, L"Tray: icon added (window 0x%p).",
+                      reinterpret_cast<void*>(hwnd_));
+        }
         return;
     }
 
@@ -121,6 +135,10 @@ void TrayIcon::AddOrUpdateIcon(bool add) {
     // NIM_ADD is enough to recover; NIM_MODIFY fails until the icon exists.
     if (!add) {
         added_ = Shell_NotifyIconW(NIM_ADD, &data) != FALSE;
+        if (!added_) {
+            LogFormat(LogLevel::Warning, L"Tray: Shell_NotifyIcon failed (error %lu).",
+                      GetLastError());
+        }
     } else {
         added_ = false;
         LogFormat(LogLevel::Warning, L"Tray: Shell_NotifyIcon failed (error %lu).",
@@ -137,13 +155,28 @@ void TrayIcon::ShowMenu() {
         return;
     }
 
-    AppendMenuW(menu, MF_STRING | (enabled_ ? MF_CHECKED : MF_UNCHECKED),
-                kToggleCommand, L"Edge gestures");
+    auto item = [menu](UINT flags, UINT_PTR id, unsigned stringId) {
+        AppendMenuW(menu, flags, id, LoadString(stringId).c_str());
+    };
+
+    item(MF_STRING | (enabled_ ? MF_CHECKED : MF_UNCHECKED), kToggleCommand,
+         IDS_MENU_EDGE_GESTURES);
+    item(MF_STRING, kSettingsCommand, IDS_MENU_SETTINGS);
+    item(MF_STRING, kZoneTestCommand, IDS_MENU_ZONE_TEST);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kOpenConfigCommand, L"Open configuration...");
-    AppendMenuW(menu, MF_STRING, kOpenLogCommand, L"Open log...");
+    item(MF_STRING, kReloadCommand, IDS_MENU_RELOAD);
+    item(MF_STRING, kOpenConfigCommand, IDS_MENU_OPEN_CONFIG);
+    item(MF_STRING, kOpenLogCommand, IDS_MENU_OPEN_LOG);
+    item(MF_STRING, kCopyLogCommand, IDS_MENU_COPY_LOG_PATH);
+    item(MF_STRING, kOpenDataCommand, IDS_MENU_OPEN_DATA_FOLDER);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, kExitCommand, L"Exit");
+    item(MF_STRING | (startWithWindows_ ? MF_CHECKED : MF_UNCHECKED), kStartupCommand,
+         IDS_MENU_START_WITH_WINDOWS);
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    item(MF_STRING, kAboutCommand, IDS_MENU_ABOUT);
+    item(MF_STRING, kUninstallCommand, IDS_MENU_UNINSTALL);
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    item(MF_STRING, kExitCommand, IDS_MENU_EXIT);
 
     SetForegroundWindow(hwnd_);
     const UINT command = TrackPopupMenu(
@@ -152,26 +185,48 @@ void TrayIcon::ShowMenu() {
     DestroyMenu(menu);
     PostMessageW(hwnd_, WM_NULL, 0, 0);
 
+    auto invoke = [this](const std::function<void()>& callback) {
+        if (callback) {
+            callback();
+        }
+    };
+
     switch (command) {
     case kToggleCommand:
-        if (callbacks_.onToggleEnabled) {
-            callbacks_.onToggleEnabled();
-        }
+        invoke(callbacks_.onToggleEnabled);
+        break;
+    case kSettingsCommand:
+        invoke(callbacks_.onOpenSettings);
+        break;
+    case kZoneTestCommand:
+        invoke(callbacks_.onOpenZoneTest);
+        break;
+    case kReloadCommand:
+        invoke(callbacks_.onReloadConfig);
         break;
     case kOpenConfigCommand:
-        if (callbacks_.onOpenConfig) {
-            callbacks_.onOpenConfig();
-        }
+        invoke(callbacks_.onOpenConfig);
         break;
     case kOpenLogCommand:
-        if (callbacks_.onOpenLog) {
-            callbacks_.onOpenLog();
-        }
+        invoke(callbacks_.onOpenLog);
+        break;
+    case kCopyLogCommand:
+        invoke(callbacks_.onCopyLogPath);
+        break;
+    case kOpenDataCommand:
+        invoke(callbacks_.onOpenDataFolder);
+        break;
+    case kStartupCommand:
+        invoke(callbacks_.onToggleStartWithWindows);
+        break;
+    case kAboutCommand:
+        invoke(callbacks_.onAbout);
+        break;
+    case kUninstallCommand:
+        invoke(callbacks_.onUninstall);
         break;
     case kExitCommand:
-        if (callbacks_.onExit) {
-            callbacks_.onExit();
-        }
+        invoke(callbacks_.onExit);
         break;
     default:
         break;
@@ -200,6 +255,13 @@ LRESULT TrayIcon::WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
     if (taskbarCreated_ != 0 && message == taskbarCreated_) {
         added_ = false;
         AddOrUpdateIcon(true);
+        return 0;
+    }
+
+    if (commandMessage_ != 0 && message == commandMessage_) {
+        if (callbacks_.onExternalCommand) {
+            callbacks_.onExternalCommand(static_cast<unsigned>(wParam));
+        }
         return 0;
     }
 

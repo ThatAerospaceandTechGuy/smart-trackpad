@@ -1,13 +1,115 @@
-// Smart Trackpad resources.  The manifest is passed to the linker by CMake,
-// the icon and version block are compiled from here.
+// Smart Trackpad resources: icon, version block, user-visible strings and the
+// settings dialog template.  Translating the product only needs this file.
+
+#include <windows.h>
 
 #include "Resources.h"
 
+#ifndef IDC_STATIC
+#define IDC_STATIC (-1)
+#endif
+
 IDI_APP_ICON ICON "app.ico"
 
+STRINGTABLE
+BEGIN
+    IDS_APP_NAME                 "Smart Trackpad"
+    IDS_TRAY_ENABLED             "enabled"
+    IDS_TRAY_DISABLED            "disabled"
+    IDS_MENU_EDGE_GESTURES       "Edge gestures"
+    IDS_MENU_SETTINGS            "Settings..."
+    IDS_MENU_ZONE_TEST           "Zone test..."
+    IDS_MENU_RELOAD              "Reload configuration"
+    IDS_MENU_OPEN_CONFIG         "Open configuration..."
+    IDS_MENU_OPEN_LOG            "Open log..."
+    IDS_MENU_COPY_LOG_PATH       "Copy log path"
+    IDS_MENU_OPEN_DATA_FOLDER    "Open data folder"
+    IDS_MENU_START_WITH_WINDOWS  "Start with Windows"
+    IDS_MENU_ABOUT               "About Smart Trackpad"
+    IDS_MENU_UNINSTALL           "Uninstall..."
+    IDS_MENU_EXIT                "Exit"
+    IDS_ABOUT_FORMAT             "Smart Trackpad %s\n\nConfiguration:\n%s\n\nLog file:\n%s"
+    IDS_UNINSTALL_CONFIRM        "Remove the Startup shortcut and the installed copy of Smart Trackpad?\n\nYour configuration and log files are kept in:\n%s"
+    IDS_UNINSTALL_FAILED         "Smart Trackpad could not remove every file. See the log for details."
+    IDS_COPY_FAILED              "Could not copy the log path to the clipboard."
+    IDS_COPY_DONE                "Log path copied to the clipboard."
+    IDS_NO_DIGITIZER             "No absolute touchpad was found, so edge gestures are inactive.\n\nOpen the tray menu and choose ""Zone test..."" to see what Windows reports, and check the log at:\n%s"
+    IDS_ZONE_TEST_TITLE          "Smart Trackpad - Zone test"
+    IDS_ZONE_TEST_HELP           "Touch the edges of the touchpad. The dot is the contact Windows reports."
+    IDS_ZONE_TEST_LEFT           "left = volume"
+    IDS_ZONE_TEST_RIGHT          "right = brightness"
+    IDS_ZONE_TEST_TOP            "top = media"
+    IDS_ZONE_TEST_CONTACT        "contact  x %.2f   y %.2f"
+    IDS_ZONE_TEST_NO_CONTACT     "no contact"
+END
+
+IDD_SETTINGS DIALOGEX 0, 0, 336, 400
+STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Smart Trackpad Settings"
+FONT 9, "Segoe UI", 400, 0, 0x1
+BEGIN
+    GROUPBOX        "Edge zones", IDC_STATIC, 7, 6, 322, 88
+    LTEXT           "Left edge width", IDC_STATIC, 16, 21, 74, 9
+    CONTROL         "", IDC_SLIDER_LEFT_W, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 18, 160, 14
+    LTEXT           "10%", IDC_VALUE_LEFT_W, 260, 21, 60, 9
+    LTEXT           "Right edge width", IDC_STATIC, 16, 38, 76, 9
+    CONTROL         "", IDC_SLIDER_RIGHT_W, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 35, 160, 14
+    LTEXT           "10%", IDC_VALUE_RIGHT_W, 260, 38, 60, 9
+    LTEXT           "Top edge height", IDC_STATIC, 16, 55, 74, 9
+    CONTROL         "", IDC_SLIDER_TOP_H, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 52, 160, 14
+    LTEXT           "10%", IDC_VALUE_TOP_H, 260, 55, 60, 9
+    AUTOCHECKBOX    "Volume", IDC_CHECK_LEFT, 16, 74, 62, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Brightness", IDC_CHECK_RIGHT, 94, 74, 66, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Media", IDC_CHECK_TOP, 176, 74, 60, 10, WS_TABSTOP
+
+    GROUPBOX        "Gestures", IDC_STATIC, 7, 100, 322, 88
+    LTEXT           "Activation", IDC_STATIC, 16, 115, 74, 9
+    CONTROL         "", IDC_SLIDER_ACTIVATION, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 112, 160, 14
+    LTEXT           "2.0%", IDC_VALUE_ACTIVATION, 260, 115, 60, 9
+    LTEXT           "Media step", IDC_STATIC, 16, 132, 74, 9
+    CONTROL         "", IDC_SLIDER_STEP, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 129, 160, 14
+    LTEXT           "10.0%", IDC_VALUE_STEP, 260, 132, 60, 9
+    LTEXT           "Cooldown", IDC_STATIC, 16, 149, 74, 9
+    CONTROL         "", IDC_SLIDER_COOLDOWN, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 146, 160, 14
+    LTEXT           "150 ms", IDC_VALUE_COOLDOWN, 260, 149, 60, 9
+    AUTOCHECKBOX    "Taps", IDC_CHECK_TAPS, 16, 168, 60, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Invert volume", IDC_CHECK_INVERT_VOLUME, 84, 168, 76, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Invert brightness", IDC_CHECK_INVERT_BRIGHTNESS, 168, 168, 88, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Invert media", IDC_CHECK_INVERT_MEDIA, 264, 168, 66, 10, WS_TABSTOP
+
+    GROUPBOX        "Limits", IDC_STATIC, 7, 194, 322, 76
+    LTEXT           "Brightness", IDC_STATIC, 16, 209, 74, 9
+    CONTROL         "", IDC_SLIDER_MIN_BRIGHTNESS, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 206, 76, 14
+    LTEXT           "5%", IDC_VALUE_MIN_BRIGHTNESS, 174, 209, 36, 9
+    LTEXT           "to", IDC_STATIC, 212, 209, 12, 9
+    CONTROL         "", IDC_SLIDER_MAX_BRIGHTNESS, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 226, 206, 58, 14
+    LTEXT           "100%", IDC_VALUE_MAX_BRIGHTNESS, 288, 209, 34, 9
+    LTEXT           "Volume", IDC_STATIC, 16, 228, 74, 9
+    CONTROL         "", IDC_SLIDER_MIN_VOLUME, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 94, 225, 76, 14
+    LTEXT           "0%", IDC_VALUE_MIN_VOLUME, 174, 228, 36, 9
+    LTEXT           "to", IDC_STATIC, 212, 228, 12, 9
+    CONTROL         "", IDC_SLIDER_MAX_VOLUME, "msctls_trackbar32", TBS_HORZ | TBS_AUTOTICKS | WS_TABSTOP, 226, 225, 58, 14
+    LTEXT           "100%", IDC_VALUE_MAX_VOLUME, 288, 228, 34, 9
+    LTEXT           "Keep a brightness floor: many panels go completely black at 0%.", IDC_STATIC, 16, 248, 300, 9
+
+    GROUPBOX        "Displays and input", IDC_STATIC, 7, 278, 322, 82
+    LTEXT           "Brightness targets", IDC_STATIC, 16, 293, 76, 9
+    COMBOBOX        IDC_COMBO_TARGETS, 94, 291, 96, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Listen to", IDC_STATIC, 206, 293, 40, 9
+    COMBOBOX        IDC_COMBO_DEVICES, 246, 291, 74, 60, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    AUTOCHECKBOX    "Show percentage", IDC_CHECK_SHOW_PERCENTAGE, 16, 312, 90, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Start with Windows", IDC_CHECK_START_WITH_WINDOWS, 114, 312, 100, 10, WS_TABSTOP
+    AUTOCHECKBOX    "Debug logging", IDC_CHECK_DEBUG, 222, 312, 84, 10, WS_TABSTOP
+    LTEXT           "Changes apply immediately; the INI file is rewritten.", IDC_STATIC, 16, 332, 300, 9
+
+    PUSHBUTTON      "Restore defaults", IDC_BUTTON_DEFAULTS, 7, 374, 90, 16
+    DEFPUSHBUTTON   "OK", IDOK, 196, 374, 62, 16
+    PUSHBUTTON      "Cancel", IDCANCEL, 264, 374, 62, 16
+END
+
 1 VERSIONINFO    // VS_VERSION_INFO must be the numeric id 1
-FILEVERSION     1,1,0,0
-PRODUCTVERSION  1,1,0,0
+FILEVERSION     1,2,0,0
+PRODUCTVERSION  1,2,0,0
 FILEFLAGSMASK   0x3fL
 FILEFLAGS       0x0L
 FILEOS          0x00040004L   // VOS_NT_WINDOWS32
@@ -19,11 +121,11 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "FileDescription",  "Smart Trackpad"
-            VALUE "FileVersion",      "1.1.0.0"
+            VALUE "FileVersion",      "1.2.0.0"
             VALUE "InternalName",     "SmartTrackpad"
             VALUE "OriginalFilename", "SmartTrackpad.exe"
             VALUE "ProductName",      "Smart Trackpad"
-            VALUE "ProductVersion",   "1.1.0.0"
+            VALUE "ProductVersion",   "1.2.0.0"
         END
     END
     BLOCK "VarFileInfo"

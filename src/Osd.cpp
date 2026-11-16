@@ -70,6 +70,26 @@ struct AccentPalette {
     return L"Segoe UI";
 }
 
+// High contrast mode replaces the accent palette with system colours so the
+// indicator stays legible.
+[[nodiscard]] bool SystemUsesHighContrast() {
+    HIGHCONTRASTW contrast{};
+    contrast.cbSize = sizeof(contrast);
+    if (SystemParametersInfoW(SPI_GETHIGHCONTRAST, sizeof(contrast), &contrast, 0)) {
+        return (contrast.dwFlags & HCF_HIGHCONTRASTON) != 0;
+    }
+    return false;
+}
+
+// Users who turn animations off should not get a fading overlay.
+[[nodiscard]] bool SystemAllowsAnimations() {
+    BOOL allowed = TRUE;
+    if (SystemParametersInfoW(SPI_GETCLIENTAREAANIMATION, 0, &allowed, 0)) {
+        return allowed != FALSE;
+    }
+    return true;
+}
+
 [[nodiscard]] bool SystemUsesLightTheme() {
     DWORD value = 0;
     DWORD size = sizeof(value);
@@ -169,6 +189,7 @@ public:
 
     void Show(OsdKind kind, int percent, bool muted = false);
     void Post(OsdKind kind, int percent, bool muted);
+    void SetShowPercentage(bool show);
 
 private:
     static LRESULT CALLBACK WindowProcStatic(HWND hwnd, UINT message,
@@ -212,6 +233,7 @@ private:
     OsdKind kind_ = OsdKind::Volume;
     int percent_ = 0;
     bool muted_ = false;
+    bool showPercentage_ = true;
     bool visible_ = false;
     double opacity_ = 0.0;
     double fadeFrom_ = 0.0;
@@ -330,6 +352,17 @@ void Osd::Impl::Post(OsdKind kind, int percent, bool muted) {
     PostMessageW(target, kApplyMessage, kindParam, valueParam);
 }
 
+void Osd::Impl::SetShowPercentage(bool show) {
+    if (showPercentage_ == show) {
+        return;
+    }
+    showPercentage_ = show;
+    if (visible_) {
+        Render();
+        Present();
+    }
+}
+
 void Osd::Impl::Position() {
     if (hwnd_ == nullptr) {
         return;
@@ -433,6 +466,7 @@ void Osd::Impl::Render() {
     }
 
     const bool light = SystemUsesLightTheme();
+    const bool highContrast = SystemUsesHighContrast();
     const float cardWidth = static_cast<float>(width_);
     const float cardHeight = static_cast<float>(height_);
     const float radius = ScaleF(static_cast<float>(kCornerRadius));
@@ -448,8 +482,12 @@ void Osd::Impl::Render() {
     AddRoundedRect(cardPath, Gdiplus::RectF(0.0f, 0.0f, cardWidth, cardHeight),
                    radius);
     const BYTE cardValue = light ? kLightCard : kDarkCard;
-    Gdiplus::SolidBrush cardBrush(
-        Gdiplus::Color(255, cardValue, cardValue, cardValue));
+    const Gdiplus::Color cardColor =
+        highContrast ? Gdiplus::Color(255, GetRValue(GetSysColor(COLOR_WINDOW)),
+                                      GetGValue(GetSysColor(COLOR_WINDOW)),
+                                      GetBValue(GetSysColor(COLOR_WINDOW)))
+                     : Gdiplus::Color(255, cardValue, cardValue, cardValue);
+    Gdiplus::SolidBrush cardBrush(cardColor);
     graphics.FillPath(&cardBrush, &cardPath);
 
     const int trackHeightPixels = Scale(kTrackHeight);
@@ -457,7 +495,11 @@ void Osd::Impl::Render() {
     const float trackTop =
         static_cast<float>((height_ - trackHeightPixels) / 2);
     const float trackLeft = static_cast<float>(Scale(kTrackLeft));
-    const float trackWidth = static_cast<float>(Scale(kTrackWidth));
+    // Without the numeric value the bar takes the space the text would use.
+    const float trackWidth =
+        showPercentage_
+            ? static_cast<float>(Scale(kTrackWidth))
+            : cardWidth - trackLeft - ScaleF(static_cast<float>(kTextRightPadding));
     const float trackRadius = trackHeight * 0.5f;
     const BYTE trackValue = light ? kLightTrack : kDarkTrack;
 
@@ -466,15 +508,26 @@ void Osd::Impl::Render() {
         trackPath,
         Gdiplus::RectF(trackLeft, trackTop, trackWidth, trackHeight),
         trackRadius);
-    Gdiplus::SolidBrush trackBrush(
-        Gdiplus::Color(255, trackValue, trackValue, trackValue));
+    const Gdiplus::Color trackColor =
+        highContrast
+            ? Gdiplus::Color(255, GetRValue(GetSysColor(COLOR_BTNSHADOW)),
+                             GetGValue(GetSysColor(COLOR_BTNSHADOW)),
+                             GetBValue(GetSysColor(COLOR_BTNSHADOW)))
+            : Gdiplus::Color(255, trackValue, trackValue, trackValue);
+    Gdiplus::SolidBrush trackBrush(trackColor);
     graphics.FillPath(&trackBrush, &trackPath);
 
     const int fillPixels = static_cast<int>(std::floor(
         trackWidth * static_cast<float>(percent_) / 100.0f));
     if (fillPixels > 0) {
         graphics.SetClip(&trackPath, Gdiplus::CombineModeReplace);
-        Gdiplus::SolidBrush fillBrush(AccentColor(light));
+        const Gdiplus::Color accent =
+            highContrast
+                ? Gdiplus::Color(255, GetRValue(GetSysColor(COLOR_HIGHLIGHT)),
+                                 GetGValue(GetSysColor(COLOR_HIGHLIGHT)),
+                                 GetBValue(GetSysColor(COLOR_HIGHLIGHT)))
+                : AccentColor(light);
+        Gdiplus::SolidBrush fillBrush(accent);
         graphics.FillRectangle(
             &fillBrush,
             Gdiplus::RectF(trackLeft, trackTop,
@@ -499,8 +552,12 @@ void Osd::Impl::Render() {
     iconFormat.SetFormatFlags(Gdiplus::StringFormatFlagsNoClip |
                               Gdiplus::StringFormatFlagsNoWrap);
     const Gdiplus::Color foreground =
-        light ? Gdiplus::Color(255, 26, 26, 26)
-              : Gdiplus::Color(255, 255, 255, 255);
+        highContrast
+            ? Gdiplus::Color(255, GetRValue(GetSysColor(COLOR_WINDOWTEXT)),
+                             GetGValue(GetSysColor(COLOR_WINDOWTEXT)),
+                             GetBValue(GetSysColor(COLOR_WINDOWTEXT)))
+            : (light ? Gdiplus::Color(255, 26, 26, 26)
+                     : Gdiplus::Color(255, 255, 255, 255));
     Gdiplus::SolidBrush foregroundBrush(foreground);
     const float iconLeft = ScaleF(static_cast<float>(kIconLeft));
     const float iconWidth = ScaleF(static_cast<float>(kIconBox));
@@ -517,6 +574,30 @@ void Osd::Impl::Render() {
                            ScaleF(static_cast<float>(kTextFontSize)),
                            Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     const std::wstring value = std::to_wstring(percent_);
+
+    if (!showPercentage_) {
+        // The bar already carries the value; skip the text entirely.
+        Gdiplus::BitmapData barData{};
+        const Gdiplus::Rect barRect(0, 0, width_, height_);
+        if (bitmap.LockBits(&barRect, Gdiplus::ImageLockModeRead,
+                            PixelFormat32bppARGB, &barData) == Gdiplus::Ok) {
+            auto* destination = static_cast<uint32_t*>(bits_);
+            const auto* source = static_cast<const BYTE*>(barData.Scan0);
+            for (int y = 0; y < height_; ++y) {
+                const BYTE* row = source + static_cast<std::ptrdiff_t>(y) * barData.Stride;
+                for (int x = 0; x < width_; ++x) {
+                    const BYTE alpha = row[x * 4 + 3];
+                    const uint32_t blue = static_cast<uint32_t>(row[x * 4 + 0]) * alpha / 255u;
+                    const uint32_t green = static_cast<uint32_t>(row[x * 4 + 1]) * alpha / 255u;
+                    const uint32_t red = static_cast<uint32_t>(row[x * 4 + 2]) * alpha / 255u;
+                    destination[y * width_ + x] = (static_cast<uint32_t>(alpha) << 24) |
+                                                  (red << 16) | (green << 8) | blue;
+                }
+            }
+            bitmap.UnlockBits(&barData);
+        }
+        return;
+    }
 
     Gdiplus::StringFormat textFormat;
     textFormat.SetAlignment(Gdiplus::StringAlignmentFar);
@@ -585,6 +666,18 @@ void Osd::Impl::Present() {
 }
 
 void Osd::Impl::StartFade(double target, int durationMs) {
+    if (!SystemAllowsAnimations()) {
+        opacity_ = std::clamp(target, 0.0, 1.0);
+        fadeTo_ = opacity_;
+        KillTimer(hwnd_, kFadeTimer);
+        if (opacity_ <= 0.001) {
+            HideNow();
+        } else {
+            Present();
+        }
+        return;
+    }
+
     fadeFrom_ = opacity_;
     fadeTo_ = std::clamp(target, 0.0, 1.0);
     fadeStarted_ = GetTickCount64();
@@ -730,6 +823,12 @@ void Osd::Show(OsdKind kind, int percent, bool muted) {
 void Osd::Post(OsdKind kind, int percent, bool muted) {
     if (impl_) {
         impl_->Post(kind, percent, muted);
+    }
+}
+
+void Osd::SetShowPercentage(bool show) {
+    if (impl_) {
+        impl_->SetShowPercentage(show);
     }
 }
 

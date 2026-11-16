@@ -3,6 +3,7 @@
 #include <memory>
 
 #include "GestureEngine.h"
+#include "SettingsTypes.h"
 
 namespace st {
 
@@ -23,6 +24,10 @@ public:
     // Absolute edge values in percent (0 = bottom, 100 = top).
     void SetVolumePercent(int percent);
     void SetBrightnessPercent(int percent);
+
+    // Applies display and overlay preferences without recreating the workers.
+    void SetBrightnessTargets(BrightnessTargets targets);
+    void SetOsdShowPercentage(bool show);
 
 private:
     static void PressVirtualKey(unsigned int virtualKey);

@@ -12,6 +12,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "ContactTracker.h"
 #include "SettingsTypes.h"
 
 namespace st {
@@ -41,6 +42,10 @@ public:
     void HandleRawInput(HRAWINPUT rawInput);
     void HandleDeviceChange(WPARAM change, HANDLE device);
 
+    // Human-readable summary of the digitizers seen so far, for the zone test
+    // window and the log.  Empty until the first report arrives.
+    [[nodiscard]] std::wstring DescribeDevices() const;
+
 private:
     struct Device {
         std::wstring name;
@@ -61,10 +66,6 @@ private:
         bool hasTipSwitch = false;
         bool hasContactCount = false;
         std::vector<USAGE> usageScratch;
-
-        // Latched after a multi-finger report; the pad must be fully released
-        // before a new one-finger gesture can start.
-        bool blocked = false;
     };
 
     Device* GetDevice(HANDLE device);
@@ -72,11 +73,9 @@ private:
     void HandleHidReport(HANDLE deviceHandle, const BYTE* report, UINT length);
     void HandleDigitizerReport(HANDLE deviceHandle, Device& device, const BYTE* report,
                                UINT length);
-    void CancelActive();
-
     Callbacks callbacks_;
     bool registered_ = false;
-    HANDLE activeDevice_ = nullptr;
+    ContactTracker tracker_;
     std::unordered_map<HANDLE, std::unique_ptr<Device>> devices_;
 };
 

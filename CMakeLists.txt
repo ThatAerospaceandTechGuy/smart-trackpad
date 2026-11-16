@@ -19,13 +19,18 @@ set(SMARTTRACKPAD_SOURCES
     src/Actions.cpp
     src/Brightness.cpp
     src/Config.cpp
+    src/ContactTracker.cpp
     src/CrashHandler.cpp
+    src/Diagnostics.cpp
     src/GestureEngine.cpp
     src/HidDecode.cpp
     src/Install.cpp
     src/Log.cpp
     src/Osd.cpp
+    src/PathCompare.cpp
     src/RawInput.cpp
+    src/Settings.cpp
+    src/Strings.cpp
     src/TrayIcon.cpp
     src/Volume.cpp
     src/Resources.rc
@@ -58,6 +63,8 @@ target_link_libraries(SmartTrackpad PRIVATE
     gdiplus
     dwmapi
     dbghelp
+    comctl32
+    wtsapi32
     uuid
 )
 
@@ -112,6 +119,18 @@ if(SMARTTRACKPAD_BUILD_TESTS)
     smarttrackpad_add_test(hid_decode
         tests/HidDecodeTests.cpp
         src/HidDecode.cpp
+    )
+
+    # Path identity / timestamp rules used by the installer.
+    smarttrackpad_add_test(path_compare
+        tests/PathCompareTests.cpp
+        src/PathCompare.cpp
+    )
+
+    # Digitizer report lifecycle (one contact, multi-finger cancel, removal).
+    smarttrackpad_add_test(contact_tracker
+        tests/ContactTrackerTests.cpp
+        src/ContactTracker.cpp
     )
 
     # INI parsing, clamping and legacy-schema migration.

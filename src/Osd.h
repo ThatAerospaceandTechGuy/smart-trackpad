@@ -28,6 +28,10 @@ public:
     // the overlay window instead of touching it directly.
     void Post(OsdKind kind, int percent, bool muted = false);
 
+    // Hides the numeric percentage, leaving only the icon and the level bar.
+    // Must be called on the UI thread.
+    void SetShowPercentage(bool show);
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;

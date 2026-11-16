@@ -217,6 +217,10 @@ BrightnessController::~BrightnessController() {
     Release();
 }
 
+void BrightnessController::SetTargets(BrightnessTargets targets) {
+    targets_.store(targets, std::memory_order_relaxed);
+}
+
 void BrightnessController::SetTargetPercent(int percent) {
     percent = std::clamp(percent, 0, 100);
 
@@ -296,17 +300,20 @@ std::optional<LevelFeedback> BrightnessController::Apply(int percent) {
         }
     }
 
+    const BrightnessTargets targets = targets_.load(std::memory_order_relaxed);
+
     int effective = percent;
     bool anyApplied = false;
 
-    if (!monitors_.empty() && ApplyDdc(percent, effective)) {
+    if (targets != BrightnessTargets::Internal && !monitors_.empty() &&
+        ApplyDdc(percent, targets, effective)) {
         anyApplied = true;
     }
 
     // Internal laptop panels usually reject DDC/CI, so the WMI value is applied
     // in addition to the DDC/CI monitors instead of only as a fallback.  On a
     // desktop without an internal panel WMI simply reports unavailability.
-    if (ApplyWmi(percent)) {
+    if (targets != BrightnessTargets::Primary && ApplyWmi(percent)) {
         anyApplied = true;
         // The internal panel is what a laptop user is looking at, so report it
         // as the visible level.
@@ -330,10 +337,16 @@ std::optional<LevelFeedback> BrightnessController::Apply(int percent) {
     return feedback;
 }
 
-bool BrightnessController::ApplyDdc(int percent, int& effectivePercent) {
+bool BrightnessController::ApplyDdc(int percent, BrightnessTargets targets,
+                                   int& effectivePercent) {
     bool anyApplied = false;
 
     for (auto it = monitors_.begin(); it != monitors_.end();) {
+        if (targets == BrightnessTargets::Primary && !it->isPrimary) {
+            ++it;
+            continue;
+        }
+
         const long range = static_cast<long>(it->maximum) -
                            static_cast<long>(it->minimum);
         const long target =
@@ -361,8 +374,16 @@ bool BrightnessController::ApplyDdc(int percent, int& effectivePercent) {
 
     // Report the level the first remaining DDC/CI monitor actually holds, in
     // case it quantizes the 0-100 value onto its own VCP range.
-    if (!monitors_.empty()) {
-        const Monitor& monitor = monitors_.front();
+    const Monitor* reported = nullptr;
+    for (const Monitor& monitor : monitors_) {
+        if (targets == BrightnessTargets::Primary && !monitor.isPrimary) {
+            continue;
+        }
+        reported = &monitor;
+        break;
+    }
+    if (reported != nullptr) {
+        const Monitor& monitor = *reported;
         const long range = static_cast<long>(monitor.maximum) -
                            static_cast<long>(monitor.minimum);
         if (range > 0) {
@@ -396,6 +417,8 @@ bool BrightnessController::ApplyWmi(int percent) {
 
 void BrightnessController::Enumerate() {
     Release();
+
+    primaryMonitor_ = MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
 
     EnumDisplayMonitors(nullptr, nullptr, &BrightnessController::EnumMonitorProc,
                         reinterpret_cast<LPARAM>(this));
@@ -445,6 +468,7 @@ BOOL CALLBACK BrightnessController::EnumMonitorProc(HMONITOR monitor, HDC, LPREC
             minimum < maximum) {
             Monitor state;
             state.handle = entry.hPhysicalMonitor;
+            state.isPrimary = monitor == self->primaryMonitor_;
             state.minimum = minimum;
             state.current = current;
             state.maximum = maximum;

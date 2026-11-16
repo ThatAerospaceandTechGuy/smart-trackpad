@@ -3,6 +3,7 @@
 #include "ComPtr.h"
 #include "Config.h"
 #include "Log.h"
+#include "PathCompare.h"
 
 #include <windows.h>
 #include <knownfolders.h>
@@ -40,52 +41,31 @@ std::filesystem::path ExecutablePath() {
     return std::filesystem::path(buffer);
 }
 
-bool SamePath(const std::filesystem::path& left,
-              const std::filesystem::path& right) {
-    if (_wcsicmp(left.lexically_normal().c_str(),
-                 right.lexically_normal().c_str()) == 0) {
-        return true;
-    }
-
-    std::error_code error;
-    if (std::filesystem::exists(left, error)) {
-        error.clear();
-        if (std::filesystem::exists(right, error)) {
-            error.clear();
-            return std::filesystem::equivalent(left, right, error) && !error;
-        }
-    }
-    return false;
-}
-
-bool SourceIsNewer(const std::filesystem::path& source,
-                   const std::filesystem::path& target) {
-    std::error_code sourceError;
-    std::error_code targetError;
-    const auto sourceTime =
-        std::filesystem::last_write_time(source, sourceError);
-    const auto targetTime =
-        std::filesystem::last_write_time(target, targetError);
-    return !sourceError && !targetError && sourceTime > targetTime;
-}
-
-bool CreateStartupShortcut(const std::filesystem::path& target) {
+std::filesystem::path StartupShortcutPath() {
     PWSTR startupFolder = nullptr;
-    const HRESULT folderResult = SHGetKnownFolderPath(
-        FOLDERID_Startup, KF_FLAG_DEFAULT, nullptr, &startupFolder);
-    if (FAILED(folderResult) || startupFolder == nullptr) {
+    const HRESULT result =
+        SHGetKnownFolderPath(FOLDERID_Startup, KF_FLAG_DEFAULT, nullptr, &startupFolder);
+    if (FAILED(result) || startupFolder == nullptr) {
         LogFormat(LogLevel::Warning,
                   L"Install: could not locate the Startup folder (0x%08lX).",
-                  static_cast<unsigned long>(folderResult));
+                  static_cast<unsigned long>(result));
         if (startupFolder != nullptr) {
             CoTaskMemFree(startupFolder);
         }
-        return false;
+        return {};
     }
 
-    const std::filesystem::path shortcutPath =
+    const std::filesystem::path path =
         std::filesystem::path(startupFolder) / kStartupShortcutName;
     CoTaskMemFree(startupFolder);
+    return path;
+}
+
+bool CreateStartupShortcut(const std::filesystem::path& target) {
+    const std::filesystem::path shortcutPath = StartupShortcutPath();
+    if (shortcutPath.empty()) {
+        return false;
+    }
 
     const HRESULT comResult =
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -143,9 +123,55 @@ bool CreateStartupShortcut(const std::filesystem::path& target) {
     return true;
 }
 
+bool RemoveStartupShortcut() {
+    const std::filesystem::path shortcutPath = StartupShortcutPath();
+    if (shortcutPath.empty()) {
+        return false;
+    }
+
+    std::error_code error;
+    if (!std::filesystem::exists(shortcutPath, error)) {
+        return true;
+    }
+    if (!std::filesystem::remove(shortcutPath, error)) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: could not remove the Startup shortcut (error %d).",
+                  error.value());
+        return false;
+    }
+
+    LogMessage(LogLevel::Info, L"Install: Startup shortcut removed.");
+    return true;
+}
+
 } // namespace
 
-bool EnsureInstalled() {
+std::filesystem::path ManagedExecutablePath() {
+    return GetDataDirectory() / kManagedExecutableName;
+}
+
+void CleanupStaleCopies() {
+    const std::filesystem::path managed = ManagedExecutablePath();
+    for (const wchar_t* suffix : {L".old", L".new"}) {
+        std::filesystem::path stale = managed;
+        stale += suffix;
+
+        std::error_code error;
+        if (!std::filesystem::exists(stale, error)) {
+            continue;
+        }
+
+        error.clear();
+        if (std::filesystem::remove(stale, error)) {
+            LogFormat(LogLevel::Info, L"Install: removed the stale copy \"%ls\".",
+                      stale.c_str());
+        }
+    }
+}
+
+bool EnsureInstalled(bool startWithWindows) {
+    CleanupStaleCopies();
+
     const std::filesystem::path source = ExecutablePath();
     if (source.empty()) {
         LogMessage(LogLevel::Warning,
@@ -153,14 +179,21 @@ bool EnsureInstalled() {
         return false;
     }
 
-    const std::filesystem::path target =
-        GetDataDirectory() / kManagedExecutableName;
+    const std::filesystem::path target = ManagedExecutablePath();
+
+    auto applyStartupPreference = [startWithWindows](const std::filesystem::path& path) {
+        if (startWithWindows) {
+            CreateStartupShortcut(path);
+        } else {
+            RemoveStartupShortcut();
+        }
+    };
 
     if (SamePath(source, target)) {
         LogFormat(LogLevel::Info,
                   L"Install: running the managed copy at \"%ls\".",
                   target.c_str());
-        CreateStartupShortcut(target);
+        applyStartupPreference(target);
         return false;
     }
 
@@ -172,7 +205,7 @@ bool EnsureInstalled() {
         LogFormat(LogLevel::Info,
                   L"Install: keeping the existing managed copy at \"%ls\".",
                   target.c_str());
-        CreateStartupShortcut(target);
+        applyStartupPreference(target);
         return false;
     }
 
@@ -216,7 +249,7 @@ bool EnsureInstalled() {
               L"Install: copied \"%ls\" to the managed location \"%ls\".",
               source.c_str(), target.c_str());
 
-    CreateStartupShortcut(target);
+    applyStartupPreference(target);
 
     // The managed copy now holds this build; hand over so the Startup shortcut
     // and the running process always execute the same file.
@@ -224,8 +257,7 @@ bool EnsureInstalled() {
 }
 
 bool LaunchManagedCopy() {
-    const std::filesystem::path target =
-        GetDataDirectory() / kManagedExecutableName;
+    const std::filesystem::path target = ManagedExecutablePath();
 
     std::error_code error;
     if (!std::filesystem::exists(target, error)) {
@@ -259,6 +291,79 @@ bool LaunchManagedCopy() {
     LogFormat(LogLevel::Info,
               L"Install: handing over to the managed copy at \"%ls\".",
               target.c_str());
+    return true;
+}
+
+bool IsStartWithWindowsEnabled() {
+    const std::filesystem::path shortcutPath = StartupShortcutPath();
+    if (shortcutPath.empty()) {
+        return false;
+    }
+
+    std::error_code error;
+    return std::filesystem::exists(shortcutPath, error);
+}
+
+bool SetStartWithWindows(bool enabled) {
+    if (enabled) {
+        const std::filesystem::path target = ManagedExecutablePath();
+        std::error_code error;
+        if (!std::filesystem::exists(target, error)) {
+            LogMessage(LogLevel::Warning,
+                       L"Install: no managed copy exists yet; the Startup "
+                       L"shortcut was not created.");
+            return false;
+        }
+        return CreateStartupShortcut(target);
+    }
+    return RemoveStartupShortcut();
+}
+
+bool RemoveManagedInstall() {
+    RemoveStartupShortcut();
+
+    const std::filesystem::path managed = ManagedExecutablePath();
+    const bool runningManagedCopy = SamePath(ExecutablePath(), managed);
+
+    std::error_code error;
+    if (!std::filesystem::exists(managed, error)) {
+        return runningManagedCopy;
+    }
+
+    if (std::filesystem::remove(managed, error)) {
+        LogFormat(LogLevel::Info, L"Install: removed \"%ls\".", managed.c_str());
+        return false;
+    }
+
+    // The executable is running: rename it out of the way (allowed while in
+    // use) and let the session delete the renamed file at the next boot.
+    std::filesystem::path stale = managed;
+    stale += L".old";
+
+    std::error_code removeError;
+    std::filesystem::remove(stale, removeError);
+
+    if (!MoveFileExW(managed.c_str(), stale.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: could not rename \"%ls\" for removal (error %lu).",
+                  managed.c_str(), GetLastError());
+        return runningManagedCopy;
+    }
+
+    // MOVEFILE_DELAY_UNTIL_REBOOT needs administrator rights, so treat it as a
+    // hint only: the leftover is deleted by CleanupStaleCopies() on the next
+    // launch either way.
+    if (MoveFileExW(stale.c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT)) {
+        LogFormat(LogLevel::Info,
+                  L"Install: \"%ls\" was scheduled for deletion."
+                  , stale.c_str());
+    } else {
+        LogFormat(LogLevel::Info,
+                  L"Install: \"%ls\" is left in place and will be removed the "
+                  L"next time Smart Trackpad starts.",
+                  stale.c_str());
+    }
+
     return true;
 }
 
