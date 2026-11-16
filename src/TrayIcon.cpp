@@ -1,6 +1,7 @@
 #include "TrayIcon.h"
 
 #include "Log.h"
+#include "Resources.h"
 
 #include <shellapi.h>
 
@@ -51,7 +52,13 @@ bool TrayIcon::Create(HINSTANCE instance, const std::wstring& title,
         return false;
     }
 
-    icon_ = LoadIconW(nullptr, IDI_APPLICATION);
+    // Prefer the application icon embedded by Resources.rc; fall back to the
+    // generic one only if the resource is missing (for example in a test
+    // build that does not link the resource script).
+    icon_ = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
+    if (icon_ == nullptr) {
+        icon_ = LoadIconW(nullptr, IDI_APPLICATION);
+    }
     BuildTooltip();
     AddOrUpdateIcon(true);
     return true;
@@ -59,14 +66,6 @@ bool TrayIcon::Create(HINSTANCE instance, const std::wstring& title,
 
 void TrayIcon::SetEnabled(bool enabled) {
     enabled_ = enabled;
-    BuildTooltip();
-    if (hwnd_ != nullptr) {
-        AddOrUpdateIcon(false);
-    }
-}
-
-void TrayIcon::UpdateTooltip(const std::wstring& title) {
-    title_ = title;
     BuildTooltip();
     if (hwnd_ != nullptr) {
         AddOrUpdateIcon(false);

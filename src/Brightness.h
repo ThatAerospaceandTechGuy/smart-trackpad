@@ -5,18 +5,22 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "Feedback.h"
+
 namespace st {
 
 // Applies absolute display brightness without blocking the message loop.
-// DDC/CI is used when a monitor exposes it; otherwise a WMI fallback handles
-// internal laptop panels (WmiMonitorBrightnessMethods).
+// DDC/CI is used for every MCCS-capable monitor and the WMI provider
+// (WmiMonitorBrightnessMethods) additionally drives an internal laptop panel,
+// so a laptop with an external screen attached moves both at once.
 class BrightnessController {
 public:
-    BrightnessController();
+    explicit BrightnessController(LevelFeedbackFn onApplied = {});
     ~BrightnessController();
 
     BrightnessController(const BrightnessController&) = delete;
@@ -45,8 +49,14 @@ private:
     void Run(std::stop_token stop);
     void Enumerate();
     void Release();
-    void Apply(int percent);
-    void ApplyWmi(int percent);
+
+    // Applies the value to every backend and returns the level the user can
+    // actually see, or nullopt when no backend accepted it.
+    std::optional<LevelFeedback> Apply(int percent);
+    bool ApplyDdc(int percent, int& effectivePercent);
+    bool ApplyWmi(int percent);
+
+    LevelFeedbackFn onApplied_;
 
     std::jthread worker_;
     std::mutex mutex_;
@@ -54,7 +64,7 @@ private:
     int pendingPercent_ = -1;
 
     bool comReady_ = false;
-    bool wmiWarned_ = false;
+    bool backendWarningLogged_ = false;
     bool enumerated_ = false;
     unsigned long long lastEnumerationTick_ = 0;
 

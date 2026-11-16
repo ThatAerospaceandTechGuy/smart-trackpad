@@ -5,13 +5,15 @@
 #include <mutex>
 #include <thread>
 
+#include "Feedback.h"
+
 namespace st {
 
 // Applies absolute system volume without blocking the message loop.
 // Uses the default multimedia render endpoint through Core Audio.
 class VolumeController {
 public:
-    VolumeController();
+    explicit VolumeController(LevelFeedbackFn onApplied = {});
     ~VolumeController();
 
     VolumeController(const VolumeController&) = delete;
@@ -27,6 +29,8 @@ private:
     struct AudioState;
 
     void Run(std::stop_token stop);
+
+    LevelFeedbackFn onApplied_;
 
     std::jthread worker_;
     std::mutex mutex_;

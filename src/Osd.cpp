@@ -8,6 +8,7 @@
 #include <gdiplus.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -36,6 +37,9 @@ constexpr int kBottomMargin = 13;
 
 constexpr UINT_PTR kFadeTimer = 1;
 constexpr UINT_PTR kHideTimer = 2;
+
+// Posted by controller workers with the confirmed level; see Osd::Post.
+constexpr UINT kApplyMessage = WM_APP + 40;
 constexpr UINT kFadeIntervalMs = 16;
 constexpr int kHoldMs = 2000;
 constexpr int kFadeInMs = 120;
@@ -163,7 +167,8 @@ public:
     Impl(const Impl&) = delete;
     Impl& operator=(const Impl&) = delete;
 
-    void Show(OsdKind kind, int percent);
+    void Show(OsdKind kind, int percent, bool muted = false);
+    void Post(OsdKind kind, int percent, bool muted);
 
 private:
     static LRESULT CALLBACK WindowProcStatic(HWND hwnd, UINT message,
@@ -186,6 +191,9 @@ private:
 
     HINSTANCE instance_ = nullptr;
     HWND hwnd_ = nullptr;
+
+    // Read by controller workers through Post(); updated only by the UI thread.
+    std::atomic<HWND> postTarget_{nullptr};
     ULONG_PTR gdiplusToken_ = 0;
     bool gdiplusStarted_ = false;
     bool classRegistered_ = false;
@@ -203,6 +211,7 @@ private:
 
     OsdKind kind_ = OsdKind::Volume;
     int percent_ = 0;
+    bool muted_ = false;
     bool visible_ = false;
     double opacity_ = 0.0;
     double fadeFrom_ = 0.0;
@@ -273,15 +282,16 @@ bool Osd::Impl::CreateOsdWindow() {
     return true;
 }
 
-void Osd::Impl::Show(OsdKind kind, int percent) {
+void Osd::Impl::Show(OsdKind kind, int percent, bool muted) {
     if (hwnd_ == nullptr) {
         return;
     }
 
     percent = std::clamp(percent, 0, 100);
-    const bool changed = kind_ != kind || percent_ != percent;
+    const bool changed = kind_ != kind || percent_ != percent || muted_ != muted;
     kind_ = kind;
     percent_ = percent;
+    muted_ = muted;
 
     Position();
     if (!EnsureSurface()) {
@@ -306,6 +316,20 @@ void Osd::Impl::Show(OsdKind kind, int percent) {
     Present();
 }
 
+void Osd::Impl::Post(OsdKind kind, int percent, bool muted) {
+    const HWND target = postTarget_.load(std::memory_order_relaxed);
+    if (target == nullptr) {
+        return;
+    }
+
+    // Runs on a controller worker thread: never touch window state here, just
+    // hand the confirmed level to the UI thread.
+    const WPARAM kindParam = kind == OsdKind::Volume ? 0u : 1u;
+    const LPARAM valueParam =
+        static_cast<LPARAM>(std::clamp(percent, 0, 100)) | (muted ? 0x10000 : 0);
+    PostMessageW(target, kApplyMessage, kindParam, valueParam);
+}
+
 void Osd::Impl::Position() {
     if (hwnd_ == nullptr) {
         return;
@@ -316,10 +340,16 @@ void Osd::Impl::Position() {
         dpi_ = static_cast<int>(dpi);
     }
 
+    // Follow the monitor the user is working on rather than always using the
+    // primary display; the touchpad is not bound to a particular screen.
+    POINT cursor{};
+    const HMONITOR monitor =
+        GetCursorPos(&cursor)
+            ? MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
+            : MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+
     MONITORINFO monitorInfo{};
     monitorInfo.cbSize = sizeof(monitorInfo);
-    const HMONITOR monitor = MonitorFromPoint(
-        POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
     if (!GetMonitorInfoW(monitor, &monitorInfo)) {
         return;
     }
@@ -460,7 +490,7 @@ void Osd::Impl::Render() {
                            Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
     const wchar_t* glyph = L"\xE706";
     if (kind_ == OsdKind::Volume) {
-        glyph = percent_ == 0 ? L"\xE74F" : L"\xE767";
+        glyph = (muted_ || percent_ == 0) ? L"\xE74F" : L"\xE767";
     }
 
     Gdiplus::StringFormat iconFormat;
@@ -614,6 +644,7 @@ LRESULT CALLBACK Osd::Impl::WindowProcStatic(HWND hwnd, UINT message,
                           reinterpret_cast<LONG_PTR>(self));
         if (self != nullptr) {
             self->hwnd_ = hwnd;
+            self->postTarget_.store(hwnd, std::memory_order_relaxed);
         }
     } else {
         self = reinterpret_cast<Impl*>(
@@ -636,6 +667,13 @@ LRESULT Osd::Impl::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
         } else if (wParam == kHideTimer) {
             OnHideTimer();
         }
+        return 0;
+
+    case kApplyMessage:
+        // Confirmed level from a controller worker: 0 = volume, 1 = brightness
+        // in the low bit of wParam; the value and mute flag travel in lParam.
+        Show(wParam == 0 ? OsdKind::Volume : OsdKind::Brightness,
+             static_cast<int>(LOWORD(lParam)), (lParam & 0x10000) != 0);
         return 0;
 
     case WM_NCHITTEST:
@@ -667,6 +705,7 @@ LRESULT Osd::Impl::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
     case WM_NCDESTROY:
         if (hwnd_ == hwnd) {
             hwnd_ = nullptr;
+            postTarget_.store(nullptr, std::memory_order_relaxed);
         }
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
         break;
@@ -682,9 +721,15 @@ Osd::Osd() : impl_(std::make_unique<Impl>()) {}
 
 Osd::~Osd() = default;
 
-void Osd::Show(OsdKind kind, int percent) {
+void Osd::Show(OsdKind kind, int percent, bool muted) {
     if (impl_) {
-        impl_->Show(kind, percent);
+        impl_->Show(kind, percent, muted);
+    }
+}
+
+void Osd::Post(OsdKind kind, int percent, bool muted) {
+    if (impl_) {
+        impl_->Post(kind, percent, muted);
     }
 }
 

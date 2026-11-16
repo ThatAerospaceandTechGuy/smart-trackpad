@@ -27,9 +27,11 @@ public:
 private:
     static void PressVirtualKey(unsigned int virtualKey);
 
-    std::unique_ptr<BrightnessController> brightness_;
-    std::unique_ptr<VolumeController> volume_;
+    // Declared first so the overlay outlives both controller workers, which
+    // post their confirmed values to it.
     std::unique_ptr<Osd> osd_;
+    std::unique_ptr<VolumeController> volume_;
+    std::unique_ptr<BrightnessController> brightness_;
 };
 
 } // namespace st

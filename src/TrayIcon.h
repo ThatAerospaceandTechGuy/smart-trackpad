@@ -24,7 +24,6 @@ public:
 
     bool Create(HINSTANCE instance, const std::wstring& title, TrayCallbacks callbacks);
     void SetEnabled(bool enabled);
-    void UpdateTooltip(const std::wstring& title);
     void Remove();
 
 private:

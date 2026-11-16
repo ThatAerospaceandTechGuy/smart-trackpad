@@ -145,12 +145,12 @@ bool CreateStartupShortcut(const std::filesystem::path& target) {
 
 } // namespace
 
-void EnsureInstalled() {
+bool EnsureInstalled() {
     const std::filesystem::path source = ExecutablePath();
     if (source.empty()) {
         LogMessage(LogLevel::Warning,
                    L"Install: could not determine the executable path.");
-        return;
+        return false;
     }
 
     const std::filesystem::path target =
@@ -161,65 +161,105 @@ void EnsureInstalled() {
                   L"Install: running the managed copy at \"%ls\".",
                   target.c_str());
         CreateStartupShortcut(target);
-        return;
+        return false;
     }
 
     std::error_code error;
     const bool targetExists = std::filesystem::exists(target, error);
     const bool shouldCopy = !targetExists || SourceIsNewer(source, target);
 
-    if (shouldCopy) {
-        error.clear();
-        std::filesystem::create_directories(target.parent_path(), error);
-        if (error) {
-            LogFormat(LogLevel::Warning,
-                      L"Install: could not create \"%ls\" for the managed copy.",
-                      target.parent_path().c_str());
-            return;
-        }
-
-        std::filesystem::path temporary = target;
-        temporary += L".new";
-
-        error.clear();
-        std::filesystem::copy_file(source, temporary,
-                                   std::filesystem::copy_options::overwrite_existing,
-                                   error);
-        if (error) {
-            LogFormat(LogLevel::Warning,
-                      L"Install: could not copy \"%ls\" to \"%ls\".",
-                      source.c_str(), temporary.c_str());
-            std::error_code cleanupError;
-            std::filesystem::remove(temporary, cleanupError);
-        } else if (!MoveFileExW(temporary.c_str(), target.c_str(),
-                                MOVEFILE_REPLACE_EXISTING |
-                                    MOVEFILE_WRITE_THROUGH)) {
-            LogFormat(LogLevel::Warning,
-                      L"Install: could not activate the managed copy at \"%ls\" "
-                      L"(error %lu).",
-                      target.c_str(), GetLastError());
-            std::error_code cleanupError;
-            std::filesystem::remove(temporary, cleanupError);
-        } else {
-            LogFormat(LogLevel::Info,
-                      L"Install: copied \"%ls\" to the managed location \"%ls\".",
-                      source.c_str(), target.c_str());
-        }
-    } else {
+    if (!shouldCopy) {
         LogFormat(LogLevel::Info,
                   L"Install: keeping the existing managed copy at \"%ls\".",
                   target.c_str());
+        CreateStartupShortcut(target);
+        return false;
     }
 
     error.clear();
-    if (!std::filesystem::exists(target, error)) {
-        LogMessage(LogLevel::Warning,
-                   L"Install: no managed executable is available; the startup "
-                   L"shortcut was not changed.");
-        return;
+    std::filesystem::create_directories(target.parent_path(), error);
+    if (error) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: could not create \"%ls\" for the managed copy.",
+                  target.parent_path().c_str());
+        return false;
     }
 
+    std::filesystem::path temporary = target;
+    temporary += L".new";
+
+    error.clear();
+    std::filesystem::copy_file(source, temporary,
+                               std::filesystem::copy_options::overwrite_existing,
+                               error);
+    if (error) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: could not copy \"%ls\" to \"%ls\".",
+                  source.c_str(), temporary.c_str());
+        std::error_code cleanupError;
+        std::filesystem::remove(temporary, cleanupError);
+        return false;
+    }
+
+    if (!MoveFileExW(temporary.c_str(), target.c_str(),
+                     MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: could not activate the managed copy at \"%ls\" "
+                  L"(error %lu). The current build keeps running.",
+                  target.c_str(), GetLastError());
+        std::error_code cleanupError;
+        std::filesystem::remove(temporary, cleanupError);
+        return false;
+    }
+
+    LogFormat(LogLevel::Info,
+              L"Install: copied \"%ls\" to the managed location \"%ls\".",
+              source.c_str(), target.c_str());
+
     CreateStartupShortcut(target);
+
+    // The managed copy now holds this build; hand over so the Startup shortcut
+    // and the running process always execute the same file.
+    return true;
+}
+
+bool LaunchManagedCopy() {
+    const std::filesystem::path target =
+        GetDataDirectory() / kManagedExecutableName;
+
+    std::error_code error;
+    if (!std::filesystem::exists(target, error)) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: \"%ls\" is missing; staying in the current "
+                  L"process.",
+                  target.c_str());
+        return false;
+    }
+
+    std::wstring commandLine = L"\"" + target.wstring() + L"\"";
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+
+    const BOOL created = CreateProcessW(
+        target.c_str(), commandLine.data(), nullptr, nullptr, FALSE, 0, nullptr,
+        target.parent_path().c_str(), &startup, &process);
+    if (!created) {
+        LogFormat(LogLevel::Warning,
+                  L"Install: could not start the managed copy at \"%ls\" "
+                  L"(error %lu); staying in the current process.",
+                  target.c_str(), GetLastError());
+        return false;
+    }
+
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+
+    LogFormat(LogLevel::Info,
+              L"Install: handing over to the managed copy at \"%ls\".",
+              target.c_str());
+    return true;
 }
 
 } // namespace st

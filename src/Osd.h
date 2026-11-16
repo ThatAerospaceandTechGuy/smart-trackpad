@@ -21,7 +21,12 @@ public:
     Osd& operator=(const Osd&) = delete;
 
     // Values are absolute percentages in the same range as the edge controls.
-    void Show(OsdKind kind, int percent);
+    // `muted` only affects the speaker icon.  Must be called on the UI thread.
+    void Show(OsdKind kind, int percent, bool muted = false);
+
+    // Thread-safe variant for controller workers: posts the confirmed value to
+    // the overlay window instead of touching it directly.
+    void Post(OsdKind kind, int percent, bool muted = false);
 
 private:
     class Impl;

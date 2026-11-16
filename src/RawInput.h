@@ -39,8 +39,6 @@ public:
     void HandleRawInput(HRAWINPUT rawInput);
     void HandleDeviceChange(WPARAM change, HANDLE device);
 
-    [[nodiscard]] bool HasDigitizer() const noexcept { return hasDigitizer_; }
-
 private:
     struct Device {
         std::wstring name;
@@ -62,7 +60,8 @@ private:
         bool hasContactCount = false;
         std::vector<USAGE> usageScratch;
 
-        bool touching = false;
+        // Latched after a multi-finger report; the pad must be fully released
+        // before a new one-finger gesture can start.
         bool blocked = false;
     };
 
@@ -75,7 +74,6 @@ private:
 
     Callbacks callbacks_;
     bool registered_ = false;
-    bool hasDigitizer_ = false;
     HANDLE activeDevice_ = nullptr;
     std::unordered_map<HANDLE, std::unique_ptr<Device>> devices_;
 };

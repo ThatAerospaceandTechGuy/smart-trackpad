@@ -1,18 +1,38 @@
 #include "Actions.h"
 
 #include "Brightness.h"
+#include "Feedback.h"
 #include "Log.h"
 #include "Osd.h"
 #include "Volume.h"
 
 #include <windows.h>
 
+#include <utility>
+
 namespace st {
 
 ActionDispatcher::ActionDispatcher()
-    : brightness_(std::make_unique<BrightnessController>()),
-      volume_(std::make_unique<VolumeController>()),
-      osd_(std::make_unique<Osd>()) {}
+    : osd_(std::make_unique<Osd>()) {
+    // The controls show the requested level immediately (the gesture engine is
+    // the responsive path) and then converge on what the hardware reports.  The
+    // controller workers post to the overlay, so this is thread safe and the
+    // overlay is declared before them.
+    LevelFeedbackFn onVolumeApplied = [this](const LevelFeedback& feedback) {
+        if (osd_) {
+            osd_->Post(OsdKind::Volume, feedback.percent, feedback.muted);
+        }
+    };
+    LevelFeedbackFn onBrightnessApplied = [this](const LevelFeedback& feedback) {
+        if (osd_) {
+            osd_->Post(OsdKind::Brightness, feedback.percent, false);
+        }
+    };
+
+    volume_ = std::make_unique<VolumeController>(std::move(onVolumeApplied));
+    brightness_ =
+        std::make_unique<BrightnessController>(std::move(onBrightnessApplied));
+}
 
 ActionDispatcher::~ActionDispatcher() = default;
 

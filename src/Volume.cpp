@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <utility>
 
 namespace st {
@@ -20,7 +21,7 @@ struct VolumeController::AudioState {
     bool warned = false;
 
     bool EnsureEndpoint();
-    bool Set(int percent);
+    std::optional<LevelFeedback> Set(int percent);
     void Warn(const wchar_t* operation, HRESULT result);
 };
 
@@ -70,9 +71,9 @@ bool VolumeController::AudioState::EnsureEndpoint() {
     return true;
 }
 
-bool VolumeController::AudioState::Set(int percent) {
+std::optional<LevelFeedback> VolumeController::AudioState::Set(int percent) {
     if (!EnsureEndpoint()) {
-        return false;
+        return std::nullopt;
     }
 
     const float scalar = static_cast<float>(std::clamp(percent, 0, 100)) / 100.0f;
@@ -84,22 +85,47 @@ bool VolumeController::AudioState::Set(int percent) {
         endpoint.Reset();
         device.Reset();
         if (!EnsureEndpoint()) {
-            return false;
+            return std::nullopt;
         }
         result = endpoint->SetMasterVolumeLevelScalar(scalar, nullptr);
     }
 
     if (FAILED(result)) {
         Warn(L"SetMasterVolumeLevelScalar", result);
-        return false;
+        return std::nullopt;
     }
 
     warned = false;
     LogFormat(LogLevel::Debug, L"Volume: set %d%%.", percent);
-    return true;
+
+    // Read it back: Core Audio may quantize the value to the endpoint's step
+    // size, and the endpoint may be muted.  The overlay shows what the user
+    // will actually hear rather than what was requested.
+    LevelFeedback feedback;
+    feedback.percent = std::clamp(percent, 0, 100);
+
+    float readBack = 0.0f;
+    if (SUCCEEDED(endpoint->GetMasterVolumeLevelScalar(&readBack))) {
+        feedback.percent = std::clamp(
+            static_cast<int>(std::lround(readBack * 100.0f)), 0, 100);
+    }
+
+    BOOL muted = FALSE;
+    if (SUCCEEDED(endpoint->GetMute(&muted))) {
+        feedback.muted = muted != FALSE;
+    }
+
+    if (feedback.percent != percent) {
+        LogFormat(LogLevel::Debug,
+                  L"Volume: endpoint quantized %d%% to %d%%.", percent,
+                  feedback.percent);
+    }
+
+    return feedback;
 }
 
-VolumeController::VolumeController() {
+VolumeController::VolumeController(LevelFeedbackFn onApplied)
+    : onApplied_(std::move(onApplied)) {
     worker_ = std::jthread([this](std::stop_token stop) { Run(std::move(stop)); });
 }
 
@@ -160,7 +186,10 @@ void VolumeController::Run(std::stop_token stop) {
 
             lock.unlock();
             if (audio_) {
-                audio_->Set(percent);
+                const std::optional<LevelFeedback> feedback = audio_->Set(percent);
+                if (feedback && onApplied_) {
+                    onApplied_(*feedback);
+                }
             }
             lock.lock();
         }

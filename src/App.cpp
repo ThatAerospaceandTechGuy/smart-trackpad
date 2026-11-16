@@ -1,7 +1,6 @@
 #include "App.h"
 
 #include "Actions.h"
-#include "Install.h"
 #include "Log.h"
 #include "RawInput.h"
 #include "TrayIcon.h"
@@ -17,11 +16,17 @@ namespace {
 
 constexpr wchar_t kInputClassName[] = L"SmartTrackpadInputWindow";
 
+// Posted by the configuration watcher (worker thread) to the input window.
+constexpr UINT kReloadConfigMessage = WM_APP + 60;
+
 } // namespace
 
 App::App() = default;
 
 App::~App() {
+    // The watcher posts to the input window, so it must stop first.
+    configWatcher_.Stop();
+
     if (tray_) {
         tray_->Remove();
         tray_.reset();
@@ -53,8 +58,6 @@ bool App::Initialize(HINSTANCE instance) {
     LogMessage(LogLevel::Info, L"Smart Trackpad starting.");
     LogFormat(LogLevel::Info, L"Configuration: %ls", config_.configPath.c_str());
     LogFormat(LogLevel::Info, L"Log file: %ls", LogPath().c_str());
-
-    EnsureInstalled();
 
     actions_ = std::make_unique<ActionDispatcher>();
     gestures_ = std::make_unique<GestureEngine>(
@@ -119,6 +122,17 @@ bool App::Initialize(HINSTANCE instance) {
 
     CreateTrayIcon();
     LogStartupSummary();
+
+    if (!configWatcher_.Watch(config_.configPath, [this] {
+            if (inputWindow_ != nullptr) {
+                PostMessageW(inputWindow_, kReloadConfigMessage, 0, 0);
+            }
+        })) {
+        LogMessage(LogLevel::Warning,
+                   L"Configuration changes cannot be watched; restart the "
+                   L"application after editing the INI file.");
+    }
+
     return true;
 }
 
@@ -194,6 +208,21 @@ void App::OnToggleEnabled() {
               enabled_ ? L"enabled" : L"disabled");
 }
 
+void App::ReloadConfig() {
+    const AppConfig updated = LoadConfig(config_.configPath);
+    config_ = updated;
+
+    if (gestures_) {
+        gestures_->SetSettings(config_.gestures);
+    }
+
+    // Re-open the log so a changed debug flag takes effect immediately.
+    InitLogging(LogPath(), config_.debugLogging);
+
+    LogMessage(LogLevel::Info, L"Configuration reloaded from disk.");
+    LogStartupSummary();
+}
+
 void App::OpenPath(const std::filesystem::path& path) const {
     const HINSTANCE result = ShellExecuteW(nullptr, L"open", path.c_str(), nullptr,
                                            nullptr, SW_SHOWNORMAL);
@@ -253,6 +282,10 @@ LRESULT App::InputWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
         if (rawInput_) {
             rawInput_->HandleDeviceChange(wParam, reinterpret_cast<HANDLE>(lParam));
         }
+        break;
+
+    case kReloadConfigMessage:
+        ReloadConfig();
         break;
 
     case WM_NCDESTROY:

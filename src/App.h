@@ -33,6 +33,7 @@ private:
     bool CreateInputWindow();
     void CreateTrayIcon();
     void OnToggleEnabled();
+    void ReloadConfig();
     void OpenPath(const std::filesystem::path& path) const;
     void LogStartupSummary() const;
 
@@ -43,6 +44,7 @@ private:
     std::unique_ptr<GestureEngine> gestures_;
     std::unique_ptr<RawInputSource> rawInput_;
     std::unique_ptr<TrayIcon> tray_;
+    ConfigWatcher configWatcher_;
     bool enabled_ = true;
 };
 

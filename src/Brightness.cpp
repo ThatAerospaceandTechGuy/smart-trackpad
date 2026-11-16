@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -202,7 +203,8 @@ bool BrightnessController::WmiState::Apply(int percent) {
     return true;
 }
 
-BrightnessController::BrightnessController() {
+BrightnessController::BrightnessController(LevelFeedbackFn onApplied)
+    : onApplied_(std::move(onApplied)) {
     worker_ = std::jthread([this](std::stop_token stop) { Run(std::move(stop)); });
 }
 
@@ -264,7 +266,10 @@ void BrightnessController::Run(std::stop_token stop) {
             }
 
             lock.unlock();
-            Apply(percent);
+            const std::optional<LevelFeedback> feedback = Apply(percent);
+            if (feedback && onApplied_) {
+                onApplied_(*feedback);
+            }
             lock.lock();
         }
     }
@@ -277,7 +282,11 @@ void BrightnessController::Run(std::stop_token stop) {
     }
 }
 
-void BrightnessController::Apply(int percent) {
+std::optional<LevelFeedback> BrightnessController::Apply(int percent) {
+    percent = std::clamp(percent, 0, 100);
+
+    // (Re)discover DDC/CI monitors only while none are known; an established
+    // list is refreshed when a monitor fails or the worker has no targets.
     if (monitors_.empty()) {
         const unsigned long long now = GetTickCount64();
         if (!enumerated_ || now - lastEnumerationTick_ > kReenumerationDelayMs) {
@@ -285,12 +294,44 @@ void BrightnessController::Apply(int percent) {
             lastEnumerationTick_ = now;
             Enumerate();
         }
-
-        if (monitors_.empty()) {
-            ApplyWmi(percent);
-            return;
-        }
     }
+
+    int effective = percent;
+    bool anyApplied = false;
+
+    if (!monitors_.empty() && ApplyDdc(percent, effective)) {
+        anyApplied = true;
+    }
+
+    // Internal laptop panels usually reject DDC/CI, so the WMI value is applied
+    // in addition to the DDC/CI monitors instead of only as a fallback.  On a
+    // desktop without an internal panel WMI simply reports unavailability.
+    if (ApplyWmi(percent)) {
+        anyApplied = true;
+        // The internal panel is what a laptop user is looking at, so report it
+        // as the visible level.
+        effective = percent;
+    }
+
+    if (!anyApplied) {
+        if (!backendWarningLogged_) {
+            backendWarningLogged_ = true;
+            LogMessage(LogLevel::Warning,
+                       L"Brightness: neither DDC/CI nor WMI accepted the value; "
+                       L"the right edge has no visible effect.");
+        }
+        return std::nullopt;
+    }
+
+    backendWarningLogged_ = false;
+
+    LevelFeedback feedback;
+    feedback.percent = std::clamp(effective, 0, 100);
+    return feedback;
+}
+
+bool BrightnessController::ApplyDdc(int percent, int& effectivePercent) {
+    bool anyApplied = false;
 
     for (auto it = monitors_.begin(); it != monitors_.end();) {
         const long range = static_cast<long>(it->maximum) -
@@ -299,12 +340,14 @@ void BrightnessController::Apply(int percent) {
             static_cast<long>(it->minimum) + (range * percent + 50) / 100;
 
         if (target == static_cast<long>(it->current)) {
+            anyApplied = true;
             ++it;
             continue;
         }
 
         if (SetMonitorBrightness(it->handle, static_cast<DWORD>(target))) {
             it->current = static_cast<DWORD>(target);
+            anyApplied = true;
             ++it;
         } else {
             LogFormat(LogLevel::Warning,
@@ -315,17 +358,27 @@ void BrightnessController::Apply(int percent) {
             it = monitors_.erase(it);
         }
     }
+
+    // Report the level the first remaining DDC/CI monitor actually holds, in
+    // case it quantizes the 0-100 value onto its own VCP range.
+    if (!monitors_.empty()) {
+        const Monitor& monitor = monitors_.front();
+        const long range = static_cast<long>(monitor.maximum) -
+                           static_cast<long>(monitor.minimum);
+        if (range > 0) {
+            const long offset = static_cast<long>(monitor.current) -
+                                static_cast<long>(monitor.minimum);
+            effectivePercent = std::clamp(
+                static_cast<int>((offset * 100 + range / 2) / range), 0, 100);
+        }
+    }
+
+    return anyApplied;
 }
 
-void BrightnessController::ApplyWmi(int percent) {
+bool BrightnessController::ApplyWmi(int percent) {
     if (!comReady_) {
-        if (!wmiWarned_) {
-            wmiWarned_ = true;
-            LogMessage(LogLevel::Warning,
-                       L"Brightness: COM could not be initialized; WMI brightness "
-                       L"fallback is disabled.");
-        }
-        return;
+        return false;
     }
 
     if (!wmi_) {
@@ -335,16 +388,10 @@ void BrightnessController::ApplyWmi(int percent) {
         wmi_->Initialize();
     }
     if (!wmi_->available) {
-        if (!wmiWarned_) {
-            wmiWarned_ = true;
-            LogMessage(LogLevel::Warning,
-                       L"Brightness: no DDC/CI or WMI brightness control is "
-                       L"available; the right edge will have no visible effect.");
-        }
-        return;
+        return false;
     }
 
-    wmi_->Apply(percent);
+    return wmi_->Apply(percent);
 }
 
 void BrightnessController::Enumerate() {
@@ -355,7 +402,7 @@ void BrightnessController::Enumerate() {
 
     if (monitors_.empty()) {
         LogMessage(LogLevel::Debug,
-                   L"Brightness: no DDC/CI monitor; falling back to WMI.");
+                   L"Brightness: no DDC/CI monitor; using WMI for internal panels.");
     } else {
         LogFormat(LogLevel::Info, L"Brightness: %u monitor(s) support DDC/CI.",
                   static_cast<unsigned>(monitors_.size()));

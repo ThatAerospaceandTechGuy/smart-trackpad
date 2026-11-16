@@ -1,5 +1,6 @@
 #include "RawInput.h"
 
+#include "HidDecode.h"
 #include "Log.h"
 
 #include <windows.h>
@@ -47,30 +48,6 @@ bool ButtonCapsMatch(const HIDP_BUTTON_CAPS& caps, USAGE page, USAGE usage) {
         return usage >= caps.Range.UsageMin && usage <= caps.Range.UsageMax;
     }
     return caps.NotRange.Usage == usage;
-}
-
-LONG SignExtend(ULONG value, USHORT bitSize) {
-    if (bitSize == 0 || bitSize >= 32) {
-        return static_cast<LONG>(value);
-    }
-
-    const ULONG signBit = 1ul << (bitSize - 1);
-    if ((value & signBit) == 0) {
-        return static_cast<LONG>(value);
-    }
-    return static_cast<LONG>(value | (~0ul << bitSize));
-}
-
-float Normalize(ULONG value, LONG minimum, LONG maximum, USHORT bitSize) {
-    if (maximum <= minimum) {
-        return 0.5f;
-    }
-
-    const LONG signedValue = (minimum < 0) ? SignExtend(value, bitSize)
-                                           : static_cast<LONG>(value);
-    const float fraction = static_cast<float>(signedValue - minimum) /
-                           static_cast<float>(maximum - minimum);
-    return std::clamp(fraction, 0.0f, 1.0f);
 }
 
 } // namespace
@@ -139,7 +116,6 @@ void RawInputSource::Unregister() {
     }
 
     devices_.clear();
-    hasDigitizer_ = false;
 }
 
 void RawInputSource::HandleRawInput(HRAWINPUT rawInput) {
@@ -230,10 +206,12 @@ void RawInputSource::ExamineDevice(Device& device, HANDLE handle) {
     }
 
     // RIDI_PREPARSEDDATA returns a copy in a caller-supplied buffer; the
-    // buffer must stay alive for every later HidP_* call.
+    // buffer must stay alive for every later HidP_* call.  A null pData query
+    // returns 0 and stores the required size in preparsedSize, so only the
+    // size is meaningful here.
     UINT preparsedSize = 0;
-    if (GetRawInputDeviceInfoW(handle, RIDI_PREPARSEDDATA, nullptr, &preparsedSize) != 0 ||
-        preparsedSize == 0) {
+    GetRawInputDeviceInfoW(handle, RIDI_PREPARSEDDATA, nullptr, &preparsedSize);
+    if (preparsedSize == 0) {
         LogFormat(LogLevel::Warning, L"HID: no preparsed data for \"%ls\".",
                   device.name.c_str());
         return;
@@ -323,7 +301,6 @@ void RawInputSource::ExamineDevice(Device& device, HANDLE handle) {
         HidP_MaxUsageListLength(HidP_Input, kUsagePageDigitizer, device.preparsed), 256);
     device.usageScratch.assign(std::max<ULONG>(maxUsages, 8), 0);
 
-    hasDigitizer_ = true;
     LogFormat(LogLevel::Info,
               L"HID digitizer: \"%ls\" (usage 0x%04X/0x%04X, X %ld..%ld, "
               L"Y %ld..%ld, tip switch %ls, contact count %ls).",
@@ -350,10 +327,10 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
     // ------------------------------------------------------------------
     // Contact state.  Tip Switch (buttons) and Contact Count (a value) are
     // queried before X/Y so a release report is honoured even if it carries
-    // no coordinates.
+    // no coordinates.  The combination rule lives in HidDecode so it is unit
+    // tested independently of the HID plumbing.
     // ------------------------------------------------------------------
-    enum class ContactState { Unknown, Up, Down, Multiple };
-    ContactState state = ContactState::Unknown;
+    hid::ContactSignals signals;
 
     if (device.hasTipSwitch) {
         ULONG usageCount = static_cast<ULONG>(device.usageScratch.size());
@@ -363,19 +340,16 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
                            reportData, length);
 
         if (status == HIDP_STATUS_SUCCESS) {
-            bool tip = false;
-            int tipCount = 0;
+            signals.tipQuery = hid::TipQuery::Ok;
             for (ULONG index = 0; index < usageCount; ++index) {
                 if (device.usageScratch[index] == kUsageTipSwitch) {
-                    tip = true;
-                    ++tipCount;
+                    ++signals.tipCount;
                 }
             }
-            state = !tip ? ContactState::Up
-                         : (tipCount > 1 ? ContactState::Multiple
-                                         : ContactState::Down);
         } else if (status == HIDP_STATUS_BUFFER_TOO_SMALL) {
-            state = ContactState::Multiple;
+            signals.tipQuery = hid::TipQuery::BufferTooSmall;
+        } else {
+            signals.tipQuery = hid::TipQuery::Failed;
         }
     }
 
@@ -384,15 +358,12 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
         if (HidP_GetUsageValue(HidP_Input, kUsagePageDigitizer, 0,
                                kUsageContactCount, &contactCount, device.preparsed,
                                reportData, length) == HIDP_STATUS_SUCCESS) {
-            if (contactCount == 0) {
-                state = ContactState::Up;
-            } else if (contactCount > 1) {
-                state = ContactState::Multiple;
-            } else if (state == ContactState::Unknown) {
-                state = ContactState::Down;
-            }
+            signals.hasContactCount = true;
+            signals.contactCount = contactCount;
         }
     }
+
+    const hid::Contact contact = hid::CombineContactSignals(signals);
 
     ULONG rawX = 0;
     ULONG rawY = 0;
@@ -405,35 +376,35 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
     float normalizedX = 0.0f;
     float normalizedY = 0.0f;
     if (hasPosition) {
-        normalizedX =
-            Normalize(rawX, device.logicalXMin, device.logicalXMax, device.xBitSize);
+        normalizedX = hid::NormalizeValue(rawX, device.logicalXMin, device.logicalXMax,
+                                          device.xBitSize);
         // HID digitizer Y grows downward; the gesture engine works in a
         // bottom-up space where the bottom of the pad is 0 and the top is 1.
-        normalizedY = 1.0f - Normalize(rawY, device.logicalYMin, device.logicalYMax,
+        normalizedY =
+            1.0f - hid::NormalizeValue(rawY, device.logicalYMin, device.logicalYMax,
                                        device.yBitSize);
     }
 
     // ------------------------------------------------------------------
     // Gesture lifecycle.
     // ------------------------------------------------------------------
-    if (state == ContactState::Multiple) {
+    if (contact == hid::Contact::Multiple) {
         CancelActive();
         return;
     }
 
-    if (state == ContactState::Up) {
+    if (contact == hid::Contact::Up) {
         if (activeDevice_ == deviceHandle) {
             activeDevice_ = nullptr;
             if (callbacks_.onContactUp) {
                 callbacks_.onContactUp();
             }
         }
-        device.touching = false;
         device.blocked = false;
         return;
     }
 
-    if (state == ContactState::Unknown && !hasPosition) {
+    if (contact == hid::Contact::Unknown && !hasPosition) {
         // A digitizer without a tip switch signals release by omitting the
         // position entirely.
         if (!device.hasTipSwitch) {
@@ -443,7 +414,6 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
                     callbacks_.onContactUp();
                 }
             }
-            device.touching = false;
             device.blocked = false;
         }
         return;
@@ -467,7 +437,6 @@ void RawInputSource::HandleDigitizerReport(HANDLE deviceHandle, Device& device,
 
     if (activeDevice_ == nullptr) {
         activeDevice_ = deviceHandle;
-        device.touching = true;
         if (callbacks_.onContactDown) {
             callbacks_.onContactDown(normalizedX, normalizedY);
         }
@@ -483,7 +452,6 @@ void RawInputSource::CancelActive() {
 
     const auto found = devices_.find(activeDevice_);
     if (found != devices_.end()) {
-        found->second->touching = false;
         found->second->blocked = true;
     }
     activeDevice_ = nullptr;
