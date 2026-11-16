@@ -26,6 +26,7 @@ public:
 
 private:
     static void PressVirtualKey(unsigned int virtualKey);
+    static void TurnMonitorOff();
 
     // Declared first so the overlay outlives both controller workers, which
     // post their confirmed values to it.

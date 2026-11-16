@@ -1,6 +1,7 @@
 #include "App.h"
 
 #include "Config.h"
+#include "CrashHandler.h"
 #include "Install.h"
 #include "Log.h"
 
@@ -27,6 +28,9 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
     // Logging starts before installation so the update itself is recorded; the
     // real debug flag is applied once the configuration has been read.
     st::InitLogging(st::GetDataDirectory() / L"smarttrackpad.log", false);
+    st::InstallCrashHandler();
+    st::LogFormat(st::LogLevel::Info, L"Smart Trackpad %ls starting.",
+                  SMARTTRACKPAD_VERSION);
 
     // Update the managed copy first and hand over to it, so the process that
     // keeps running is always the one the Startup shortcut points at.  Doing

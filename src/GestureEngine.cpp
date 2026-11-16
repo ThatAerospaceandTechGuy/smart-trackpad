@@ -1,6 +1,7 @@
 #include "GestureEngine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <utility>
@@ -24,24 +25,59 @@ float SanitizeActivation(float value) {
     return std::clamp(value, kMinActivation, 0.5f);
 }
 
+std::uint64_t MonotonicMilliseconds() {
+    using namespace std::chrono;
+    return static_cast<std::uint64_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count());
+}
+
+int SanitizePercent(int value) {
+    return std::clamp(value, 0, 100);
+}
+
+GestureSettings SanitizeSettings(GestureSettings settings) {
+    // Degenerate distances would make the step loop spin forever.
+    settings.stepDistance = SanitizeStep(settings.stepDistance);
+    settings.activationDistance = SanitizeActivation(settings.activationDistance);
+    settings.tapDistance = Clamp01(std::max(settings.tapDistance, 0.001f));
+    settings.tapDurationMs = std::clamp(settings.tapDurationMs, 50, 2000);
+    settings.cooldownMs = std::clamp(settings.cooldownMs, 0, 2000);
+
+    settings.minVolumePercent = SanitizePercent(settings.minVolumePercent);
+    settings.maxVolumePercent = SanitizePercent(settings.maxVolumePercent);
+    settings.minBrightnessPercent = SanitizePercent(settings.minBrightnessPercent);
+    settings.maxBrightnessPercent = SanitizePercent(settings.maxBrightnessPercent);
+    if (settings.minVolumePercent > settings.maxVolumePercent) {
+        std::swap(settings.minVolumePercent, settings.maxVolumePercent);
+    }
+    if (settings.minBrightnessPercent > settings.maxBrightnessPercent) {
+        std::swap(settings.minBrightnessPercent, settings.maxBrightnessPercent);
+    }
+    return settings;
+}
+
 } // namespace
 
 GestureEngine::GestureEngine(GestureSettings settings, VolumeFn onVolume,
-                             ActionFn onAction, BrightnessFn onBrightness)
-    : settings_(settings),
+                             ActionFn onAction, BrightnessFn onBrightness,
+                             ClockFn clock)
+    : settings_(SanitizeSettings(settings)),
       onVolume_(std::move(onVolume)),
       onAction_(std::move(onAction)),
-      onBrightness_(std::move(onBrightness)) {
-    // Degenerate distances would make the step loop spin forever.
-    settings_.stepDistance = SanitizeStep(settings_.stepDistance);
-    settings_.activationDistance = SanitizeActivation(settings_.activationDistance);
-}
+      onBrightness_(std::move(onBrightness)),
+      clock_(std::move(clock)) {}
 
 void GestureEngine::SetSettings(const GestureSettings& settings) {
-    settings_ = settings;
-    settings_.stepDistance = SanitizeStep(settings_.stepDistance);
-    settings_.activationDistance = SanitizeActivation(settings_.activationDistance);
+    settings_ = SanitizeSettings(settings);
     Finish();
+}
+
+std::uint64_t GestureEngine::Now() const {
+    return clock_ ? clock_() : MonotonicMilliseconds();
+}
+
+bool GestureEngine::IsCoolingDown() const noexcept {
+    return Now() < cooldownUntilMs_;
 }
 
 void GestureEngine::OnContactDown(float x, float y) {
@@ -51,10 +87,17 @@ void GestureEngine::OnContactDown(float x, float y) {
         return;
     }
 
+    // A cancelled gesture (second finger, device removed) leaves the pad hot;
+    // wait out the cooldown so the palm that caused it cannot re-trigger.
+    if (Now() < cooldownUntilMs_) {
+        return;
+    }
+
     state_ = State::Pending;
     zone_ = EdgeZone::None;
     start_ = Point{Clamp01(x), Clamp01(y)};
     anchor_ = start_;
+    downTimeMs_ = Now();
     lastVolumePercent_ = -1;
     lastBrightnessPercent_ = -1;
 }
@@ -132,10 +175,23 @@ void GestureEngine::OnContactMove(float x, float y) {
 }
 
 void GestureEngine::OnContactUp() {
+    // A contact that never travelled far enough to activate a zone is a tap,
+    // provided it was short and started inside an enabled band.
+    if (state_ == State::Pending && settings_.tapsEnabled) {
+        const std::uint64_t held = Now() - downTimeMs_;
+        if (held <= static_cast<std::uint64_t>(settings_.tapDurationMs)) {
+            const EdgeZone tapZone = ResolveTapZone();
+            if (tapZone != EdgeZone::None) {
+                EmitTap(tapZone);
+            }
+        }
+    }
+
     Finish();
 }
 
 void GestureEngine::OnContactCancel() {
+    StartCooldown(Now());
     Finish();
 }
 
@@ -163,6 +219,21 @@ EdgeZone GestureEngine::ResolveZone(float dx, float dy) const {
     return EdgeZone::None;
 }
 
+EdgeZone GestureEngine::ResolveTapZone() const {
+    // A tap carries no direction, so a corner resolves to the vertical edge:
+    // the sliders are the controls a tap augments.
+    if (settings_.leftEnabled && start_.x <= settings_.leftBand) {
+        return EdgeZone::Left;
+    }
+    if (settings_.rightEnabled && start_.x >= 1.0f - settings_.rightBand) {
+        return EdgeZone::Right;
+    }
+    if (settings_.topEnabled && start_.y >= 1.0f - settings_.topBand) {
+        return EdgeZone::Top;
+    }
+    return EdgeZone::None;
+}
+
 void GestureEngine::EmitMediaStep(int direction) {
     EdgeAction action =
         direction > 0 ? EdgeAction::MediaNext : EdgeAction::MediaPrevious;
@@ -176,6 +247,26 @@ void GestureEngine::EmitMediaStep(int direction) {
     }
 }
 
+void GestureEngine::EmitTap(EdgeZone zone) {
+    if (!onAction_) {
+        return;
+    }
+
+    switch (zone) {
+    case EdgeZone::Left:
+        onAction_(EdgeAction::ToggleMute);
+        break;
+    case EdgeZone::Right:
+        onAction_(EdgeAction::MonitorOff);
+        break;
+    case EdgeZone::Top:
+        onAction_(EdgeAction::MediaPlayPause);
+        break;
+    case EdgeZone::None:
+        break;
+    }
+}
+
 void GestureEngine::EmitVolume(float y) {
     if (!onVolume_ || !settings_.leftEnabled) {
         return;
@@ -186,6 +277,8 @@ void GestureEngine::EmitVolume(float y) {
     if (settings_.invertVolume) {
         percent = 100 - percent;
     }
+    percent = std::clamp(percent, settings_.minVolumePercent,
+                         settings_.maxVolumePercent);
 
     // Reports arrive as fast as the HID device produces them.  Only forward
     // a change of at least one percent; the volume worker coalesces the rest.
@@ -207,6 +300,8 @@ void GestureEngine::EmitBrightness(float y) {
     if (settings_.invertBrightness) {
         percent = 100 - percent;
     }
+    percent = std::clamp(percent, settings_.minBrightnessPercent,
+                         settings_.maxBrightnessPercent);
 
     // Gesture reports arrive as fast as the HID device produces them.  Only
     // forward a change of at least one percent; the brightness worker
@@ -219,11 +314,18 @@ void GestureEngine::EmitBrightness(float y) {
     onBrightness_(percent);
 }
 
+void GestureEngine::StartCooldown(std::uint64_t now) {
+    if (settings_.cooldownMs > 0) {
+        cooldownUntilMs_ = now + static_cast<std::uint64_t>(settings_.cooldownMs);
+    }
+}
+
 void GestureEngine::Finish() {
     state_ = State::Idle;
     zone_ = EdgeZone::None;
     start_ = Point{};
     anchor_ = Point{};
+    downTimeMs_ = 0;
     lastVolumePercent_ = -1;
     lastBrightnessPercent_ = -1;
 }

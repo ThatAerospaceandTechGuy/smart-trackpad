@@ -44,7 +44,27 @@ void ActionDispatcher::Handle(EdgeAction action) {
     case EdgeAction::MediaPrevious:
         PressVirtualKey(VK_MEDIA_PREV_TRACK);
         break;
+    case EdgeAction::MediaPlayPause:
+        PressVirtualKey(VK_MEDIA_PLAY_PAUSE);
+        break;
+    case EdgeAction::ToggleMute:
+        volume_->ToggleMute();
+        break;
+    case EdgeAction::MonitorOff:
+        TurnMonitorOff();
+        break;
     }
+}
+
+void ActionDispatcher::TurnMonitorOff() {
+    // Broadcast the display-power request; any key or touch wakes the screen.
+    DWORD_PTR result = 0;
+    const LRESULT sent = SendMessageTimeoutW(
+        HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER,
+        static_cast<LPARAM>(2 /* power off */), SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG,
+        1000, &result);
+    LogFormat(LogLevel::Debug, L"Monitor off request returned %lld.",
+              static_cast<long long>(sent));
 }
 
 void ActionDispatcher::SetVolumePercent(int percent) {

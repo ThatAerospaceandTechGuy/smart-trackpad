@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(SmartTrackpad VERSION 1.1.0 LANGUAGES CXX)
+project(SmartTrackpad VERSION 1.2.0 LANGUAGES CXX)
 
 if(NOT WIN32)
     message(FATAL_ERROR "SmartTrackpad is a Windows-only application.")
@@ -19,6 +19,7 @@ set(SMARTTRACKPAD_SOURCES
     src/Actions.cpp
     src/Brightness.cpp
     src/Config.cpp
+    src/CrashHandler.cpp
     src/GestureEngine.cpp
     src/HidDecode.cpp
     src/Install.cpp
@@ -44,6 +45,7 @@ target_compile_definitions(SmartTrackpad PRIVATE
     _UNICODE
     WIN32_LEAN_AND_MEAN
     NOMINMAX
+    SMARTTRACKPAD_VERSION=L"${PROJECT_VERSION}"
 )
 target_link_libraries(SmartTrackpad PRIVATE
     user32
@@ -55,6 +57,7 @@ target_link_libraries(SmartTrackpad PRIVATE
     oleaut32
     gdiplus
     dwmapi
+    dbghelp
     uuid
 )
 

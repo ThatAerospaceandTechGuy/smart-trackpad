@@ -22,6 +22,7 @@ struct VolumeController::AudioState {
 
     bool EnsureEndpoint();
     std::optional<LevelFeedback> Set(int percent);
+    std::optional<LevelFeedback> ToggleMute();
     void Warn(const wchar_t* operation, HRESULT result);
 };
 
@@ -124,6 +125,39 @@ std::optional<LevelFeedback> VolumeController::AudioState::Set(int percent) {
     return feedback;
 }
 
+std::optional<LevelFeedback> VolumeController::AudioState::ToggleMute() {
+    if (!EnsureEndpoint()) {
+        return std::nullopt;
+    }
+
+    BOOL muted = FALSE;
+    if (FAILED(endpoint->GetMute(&muted))) {
+        Warn(L"GetMute", E_FAIL);
+        return std::nullopt;
+    }
+
+    const HRESULT result = endpoint->SetMute(muted ? FALSE : TRUE, nullptr);
+    if (FAILED(result)) {
+        Warn(L"SetMute", result);
+        return std::nullopt;
+    }
+
+    LevelFeedback feedback;
+    float readBack = 0.0f;
+    if (SUCCEEDED(endpoint->GetMasterVolumeLevelScalar(&readBack))) {
+        feedback.percent = std::clamp(
+            static_cast<int>(std::lround(readBack * 100.0f)), 0, 100);
+    }
+
+    BOOL nowMuted = FALSE;
+    if (SUCCEEDED(endpoint->GetMute(&nowMuted))) {
+        feedback.muted = nowMuted != FALSE;
+    }
+
+    LogFormat(LogLevel::Debug, L"Volume: %ls.", feedback.muted ? L"muted" : L"unmuted");
+    return feedback;
+}
+
 VolumeController::VolumeController(LevelFeedbackFn onApplied)
     : onApplied_(std::move(onApplied)) {
     worker_ = std::jthread([this](std::stop_token stop) { Run(std::move(stop)); });
@@ -147,6 +181,14 @@ void VolumeController::SetTargetPercent(int percent) {
     condition_.notify_one();
 }
 
+void VolumeController::ToggleMute() {
+    {
+        std::lock_guard lock(mutex_);
+        pendingMuteToggle_ = true;
+    }
+    condition_.notify_one();
+}
+
 void VolumeController::Run(std::stop_token stop) {
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     const bool comReady =
@@ -166,7 +208,8 @@ void VolumeController::Run(std::stop_token stop) {
 
         for (;;) {
             condition_.wait(lock, [this, &stop] {
-                return pendingPercent_ >= 0 || stop.stop_requested();
+                return pendingPercent_ >= 0 || pendingMuteToggle_ ||
+                       stop.stop_requested();
             });
 
             if (stop.stop_requested()) {
@@ -180,13 +223,15 @@ void VolumeController::Run(std::stop_token stop) {
             }
 
             const int percent = std::exchange(pendingPercent_, -1);
-            if (percent < 0) {
+            const bool toggle = std::exchange(pendingMuteToggle_, false);
+            if (percent < 0 && !toggle) {
                 continue;
             }
 
             lock.unlock();
             if (audio_) {
-                const std::optional<LevelFeedback> feedback = audio_->Set(percent);
+                const std::optional<LevelFeedback> feedback =
+                    toggle ? audio_->ToggleMute() : audio_->Set(percent);
                 if (feedback && onApplied_) {
                     onApplied_(*feedback);
                 }

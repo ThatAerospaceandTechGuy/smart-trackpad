@@ -1,7 +1,8 @@
 #include "GestureEngine.h"
 
-#include <iostream>
+#include <cstdint>
 #include <initializer_list>
+#include <iostream>
 #include <vector>
 
 namespace {
@@ -24,6 +25,7 @@ struct Rig {
     std::vector<int> volume;
     std::vector<EdgeAction> actions;
     std::vector<int> brightness;
+    std::uint64_t now = 1000;
     GestureEngine engine;
 
     explicit Rig(GestureSettings value = {})
@@ -31,12 +33,22 @@ struct Rig {
           engine(settings,
                  [this](int percent) { volume.push_back(percent); },
                  [this](EdgeAction action) { actions.push_back(action); },
-                 [this](int percent) { brightness.push_back(percent); }) {}
+                 [this](int percent) { brightness.push_back(percent); },
+                 [this] { return now; }) {}
 
     void Down(float x, float y) { engine.OnContactDown(x, y); }
     void Move(float x, float y) { engine.OnContactMove(x, y); }
     void Up() { engine.OnContactUp(); }
+    void Cancel() { engine.OnContactCancel(); }
+    // Advances the injected clock, used by the tap and cooldown tests.
+    void Advance(std::uint64_t milliseconds) { now += milliseconds; }
 };
+
+void CheckEmpty(const Rig& rig) {
+    CHECK(rig.volume.empty());
+    CHECK(rig.brightness.empty());
+    CHECK(rig.actions.empty());
+}
 
 void CheckVolume(const Rig& rig, std::initializer_list<int> expected) {
     const std::vector<int> want(expected);
@@ -350,6 +362,141 @@ void TestNewGestureAfterLift() {
     CheckVolume(rig, {55});
 }
 
+void TestBrightnessFloorClamp() {
+    GestureSettings settings;
+    settings.minBrightnessPercent = 20;
+    Rig rig(settings);
+
+    rig.Down(0.95f, 0.50f);
+    rig.Move(0.95f, 0.55f);
+    CheckBrightness(rig, {55});
+
+    rig.Move(0.95f, 0.00f); // Bottom of the pad would be 0%; the floor wins.
+    CheckBrightness(rig, {55, 20});
+
+    rig.Move(0.95f, 0.10f); // 10% still below the floor: no new value.
+    CheckBrightness(rig, {55, 20});
+
+    rig.Move(0.95f, 1.00f);
+    CheckBrightness(rig, {55, 20, 100});
+}
+
+void TestVolumeRangeClamp() {
+    GestureSettings settings;
+    settings.minVolumePercent = 15;
+    settings.maxVolumePercent = 80;
+    Rig rig(settings);
+
+    rig.Down(0.05f, 0.50f);
+    rig.Move(0.05f, 0.05f);
+    rig.Move(0.05f, 0.95f);
+    CheckVolume(rig, {15, 80});
+}
+
+void TestTapOnLeftEdgeMutes() {
+    Rig rig;
+    rig.Down(0.05f, 0.50f);
+    rig.Advance(80);
+    rig.Up();
+    CheckActions(rig, {EdgeAction::ToggleMute});
+    CHECK(rig.volume.empty());
+    CHECK(rig.brightness.empty());
+}
+
+void TestTapOnRightEdgeTurnsDisplayOff() {
+    Rig rig;
+    rig.Down(0.95f, 0.60f);
+    rig.Advance(120);
+    rig.Up();
+    CheckActions(rig, {EdgeAction::MonitorOff});
+    CHECK(rig.volume.empty());
+}
+
+void TestTapOnTopEdgeTogglesPlayback() {
+    Rig rig;
+    rig.Down(0.50f, 0.95f);
+    rig.Advance(100);
+    rig.Up();
+    CheckActions(rig, {EdgeAction::MediaPlayPause});
+}
+
+void TestTapInCornerPrefersVerticalEdge() {
+    Rig rig;
+    rig.Down(0.05f, 0.95f);
+    rig.Advance(100);
+    rig.Up();
+    CheckActions(rig, {EdgeAction::ToggleMute});
+}
+
+void TestTapRejectedWhenHeldTooLong() {
+    Rig rig;
+    rig.Down(0.05f, 0.50f);
+    rig.Advance(900); // Longer than the default 350 ms tap window.
+    rig.Up();
+    CheckEmpty(rig);
+}
+
+void TestTapRejectedAfterMovement() {
+    Rig rig;
+    rig.Down(0.05f, 0.50f);
+    rig.Move(0.05f, 0.55f); // Crosses activation: this is a slide, not a tap.
+    CheckVolume(rig, {55});
+    rig.Up();
+    CheckActions(rig, {});
+}
+
+void TestTapRejectedInTheMiddle() {
+    Rig rig;
+    rig.Down(0.50f, 0.50f);
+    rig.Advance(100);
+    rig.Up();
+    CheckEmpty(rig);
+}
+
+void TestTapsCanBeDisabled() {
+    GestureSettings settings;
+    settings.tapsEnabled = false;
+    Rig rig(settings);
+    rig.Down(0.05f, 0.50f);
+    rig.Advance(100);
+    rig.Up();
+    CheckEmpty(rig);
+}
+
+void TestCooldownAfterCancel() {
+    Rig rig;
+    rig.Down(0.05f, 0.50f);
+    rig.Move(0.05f, 0.55f);
+    CheckVolume(rig, {55});
+
+    rig.Cancel(); // Second finger: the pad must settle before a new gesture.
+    CHECK(!rig.engine.IsTracking());
+    CHECK(rig.engine.IsCoolingDown());
+
+    rig.Down(0.05f, 0.50f);
+    CHECK(!rig.engine.IsTracking());
+    rig.Move(0.05f, 0.70f);
+    CheckVolume(rig, {55});
+
+    rig.Advance(200);
+    CHECK(!rig.engine.IsCoolingDown());
+    rig.Down(0.05f, 0.50f);
+    CHECK(rig.engine.IsTracking());
+    rig.Move(0.05f, 0.70f);
+    CheckVolume(rig, {55, 70});
+}
+
+void TestNormalLiftDoesNotStartCooldown() {
+    Rig rig;
+    rig.Down(0.05f, 0.50f);
+    rig.Move(0.05f, 0.55f);
+    rig.Up();
+    CHECK(!rig.engine.IsCoolingDown());
+
+    rig.Down(0.95f, 0.50f); // An immediate new gesture is accepted.
+    CHECK(rig.engine.IsTracking());
+}
+
 } // namespace
 
 #define RUN_TEST(test)          \
@@ -375,6 +522,18 @@ int main() {
     RUN_TEST(TestDisablingZones);
     RUN_TEST(TestInversion);
     RUN_TEST(TestNewGestureAfterLift);
+    RUN_TEST(TestBrightnessFloorClamp);
+    RUN_TEST(TestVolumeRangeClamp);
+    RUN_TEST(TestTapOnLeftEdgeMutes);
+    RUN_TEST(TestTapOnRightEdgeTurnsDisplayOff);
+    RUN_TEST(TestTapOnTopEdgeTogglesPlayback);
+    RUN_TEST(TestTapInCornerPrefersVerticalEdge);
+    RUN_TEST(TestTapRejectedWhenHeldTooLong);
+    RUN_TEST(TestTapRejectedAfterMovement);
+    RUN_TEST(TestTapRejectedInTheMiddle);
+    RUN_TEST(TestTapsCanBeDisabled);
+    RUN_TEST(TestCooldownAfterCancel);
+    RUN_TEST(TestNormalLiftDoesNotStartCooldown);
 
     if (g_failures != 0) {
         std::cerr << g_failures << " check(s) failed.\n";

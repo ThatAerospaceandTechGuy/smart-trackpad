@@ -94,6 +94,16 @@ void TestDefaultsAreCreated() {
     CHECK(!config.gestures.invertBrightness);
     CHECK(!config.gestures.invertMedia);
     CHECK(!config.debugLogging);
+    CHECK(config.gestures.tapsEnabled);
+    CHECK(config.gestures.cooldownMs == 150);
+    CHECK(config.gestures.minVolumePercent == 0);
+    CHECK(config.gestures.maxVolumePercent == 100);
+    CHECK(config.gestures.minBrightnessPercent == 5);   // safety floor
+    CHECK(config.gestures.maxBrightnessPercent == 100);
+    CHECK(config.devices == st::DigitizerDevices::Touchpad);
+    CHECK(config.brightnessTargets == st::BrightnessTargets::All);
+    CHECK(config.osdShowPercentage);
+    CHECK(config.startWithWindows);
     CHECK(config.configPath == path);
 
     // The generated file must describe the current schema.
@@ -249,6 +259,105 @@ debug=maybe
     CHECK(!config.debugLogging);
 }
 
+void TestNewSectionsAreParsed() {
+    TempDirectory temp;
+    const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
+    WriteIni(path, LR"INI([gestures]
+taps=0
+cooldown=500
+
+[safety]
+min_volume=15
+max_volume=85
+min_brightness=25
+max_brightness=95
+
+[display]
+brightness_targets=primary
+
+[input]
+devices=touchscreen
+
+[osd]
+show_percentage=0
+
+[general]
+start_with_windows=0
+config_version=2
+)INI");
+
+    const st::AppConfig config = st::LoadConfig(path);
+
+    CHECK(!config.gestures.tapsEnabled);
+    CHECK(config.gestures.cooldownMs == 500);
+    CHECK(config.gestures.minVolumePercent == 15);
+    CHECK(config.gestures.maxVolumePercent == 85);
+    CHECK(config.gestures.minBrightnessPercent == 25);
+    CHECK(config.gestures.maxBrightnessPercent == 95);
+    CHECK(config.devices == st::DigitizerDevices::Touchscreen);
+    CHECK(config.brightnessTargets == st::BrightnessTargets::Primary);
+    CHECK(!config.osdShowPercentage);
+    CHECK(!config.startWithWindows);
+}
+
+void TestInvertedSafetyRangeIsSwapped() {
+    TempDirectory temp;
+    const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
+    WriteIni(path, LR"INI([safety]
+min_volume=90
+max_volume=10
+)INI");
+
+    const st::AppConfig config = st::LoadConfig(path);
+
+    CHECK(config.gestures.minVolumePercent == 10);
+    CHECK(config.gestures.maxVolumePercent == 90);
+}
+
+void TestSaveConfigRoundTrip() {
+    TempDirectory temp;
+    const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
+
+    st::AppConfig config = st::LoadConfig(path);
+    config.gestures.leftBand = 0.18f;
+    config.gestures.topBand = 0.07f;
+    config.gestures.stepDistance = 0.20f;
+    config.gestures.activationDistance = 0.03f;
+    config.gestures.invertMedia = true;
+    config.gestures.tapsEnabled = false;
+    config.gestures.cooldownMs = 400;
+    config.gestures.minBrightnessPercent = 20;
+    config.gestures.maxVolumePercent = 90;
+    config.devices = st::DigitizerDevices::Both;
+    config.brightnessTargets = st::BrightnessTargets::Internal;
+    config.osdShowPercentage = false;
+    config.startWithWindows = false;
+    config.debugLogging = true;
+
+    CHECK(st::SaveConfig(path, config));
+
+    const st::AppConfig reloaded = st::LoadConfig(path);
+    CHECK(NearlyEqual(reloaded.gestures.leftBand, 0.18f));
+    CHECK(NearlyEqual(reloaded.gestures.topBand, 0.07f));
+    CHECK(NearlyEqual(reloaded.gestures.stepDistance, 0.20f));
+    CHECK(NearlyEqual(reloaded.gestures.activationDistance, 0.03f));
+    CHECK(reloaded.gestures.invertMedia);
+    CHECK(!reloaded.gestures.tapsEnabled);
+    CHECK(reloaded.gestures.cooldownMs == 400);
+    CHECK(reloaded.gestures.minBrightnessPercent == 20);
+    CHECK(reloaded.gestures.maxVolumePercent == 90);
+    CHECK(reloaded.devices == st::DigitizerDevices::Both);
+    CHECK(reloaded.brightnessTargets == st::BrightnessTargets::Internal);
+    CHECK(!reloaded.osdShowPercentage);
+    CHECK(!reloaded.startWithWindows);
+    CHECK(reloaded.debugLogging);
+
+    // The rewritten file is current: no legacy section, and a schema marker.
+    CHECK(!HasSection(path, L"brightness"));
+    CHECK(HasSection(path, L"safety"));
+    CHECK(HasSection(path, L"general"));
+}
+
 } // namespace
 
 #define RUN_TEST(test)              \
@@ -264,6 +373,9 @@ int main() {
     RUN_TEST(TestMinimumBandsSurviveLeavingDefaults);
     RUN_TEST(TestLegacyConfigIsMigrated);
     RUN_TEST(TestMalformedValuesFallBackToDefaults);
+    RUN_TEST(TestNewSectionsAreParsed);
+    RUN_TEST(TestInvertedSafetyRangeIsSwapped);
+    RUN_TEST(TestSaveConfigRoundTrip);
 
     if (g_failures != 0) {
         std::cerr << g_failures << " check(s) failed.\n";

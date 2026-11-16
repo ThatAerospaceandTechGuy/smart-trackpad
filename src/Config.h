@@ -6,12 +6,23 @@
 #include <thread>
 
 #include "GestureEngine.h"
+#include "SettingsTypes.h"
 
 namespace st {
 
 struct AppConfig {
     GestureSettings gestures;
+
+    // Which HID collections are accepted as input.
+    DigitizerDevices devices = DigitizerDevices::Touchpad;
+
+    // Which displays the brightness edge drives.
+    BrightnessTargets brightnessTargets = BrightnessTargets::All;
+
+    bool osdShowPercentage = true;
+    bool startWithWindows = true;
     bool debugLogging = false;
+
     std::filesystem::path configPath;
 };
 
@@ -23,6 +34,10 @@ struct AppConfig {
 // migrating a file written by an older release to the current schema.
 // Out-of-range values are clamped; malformed values fall back to defaults.
 [[nodiscard]] AppConfig LoadConfig(const std::filesystem::path& path);
+
+// Writes the configuration in the current schema (same template the first-run
+// file uses).  Used by the settings dialog.
+bool SaveConfig(const std::filesystem::path& path, const AppConfig& config);
 
 // Watches the configuration directory for writes to the INI file and invokes
 // the callback from a worker thread.  The callback is debounced so an editor

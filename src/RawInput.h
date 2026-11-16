@@ -12,6 +12,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "SettingsTypes.h"
+
 namespace st {
 
 // Receives absolute HID digitizer contacts (Windows Precision Touchpad or
@@ -31,9 +33,9 @@ public:
     RawInputSource(const RawInputSource&) = delete;
     RawInputSource& operator=(const RawInputSource&) = delete;
 
-    // Registers for HID touchpad/touchscreen top-level collections on the
-    // caller's window (created with HWND_MESSAGE) with RIDEV_INPUTSINK.
-    bool Register(HWND target);
+    // Registers for the requested HID top-level collections on the caller's
+    // window (created with HWND_MESSAGE) with RIDEV_INPUTSINK.
+    bool Register(HWND target, DigitizerDevices devices);
     void Unregister();
 
     void HandleRawInput(HRAWINPUT rawInput);

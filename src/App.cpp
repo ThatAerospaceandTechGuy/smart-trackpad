@@ -108,7 +108,7 @@ bool App::Initialize(HINSTANCE instance) {
 
     rawInput_ = std::make_unique<RawInputSource>(std::move(callbacks));
 
-    if (!rawInput_->Register(inputWindow_)) {
+    if (!rawInput_->Register(inputWindow_, config_.devices)) {
         LogMessage(LogLevel::Error,
                    L"No HID digitizer collection could be registered.");
         const std::wstring text =

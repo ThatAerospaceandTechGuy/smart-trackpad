@@ -59,14 +59,19 @@ RawInputSource::~RawInputSource() {
     Unregister();
 }
 
-bool RawInputSource::Register(HWND target) {
-    constexpr struct {
+bool RawInputSource::Register(HWND target, DigitizerDevices devices) {
+    struct Collection {
         USAGE usage;
         const wchar_t* name;
-    } collections[] = {
-        {kUsageTouchPad, L"touchpad"},
-        {kUsageTouchScreen, L"touchscreen"},
     };
+
+    std::vector<Collection> collections;
+    if (devices == DigitizerDevices::Touchpad || devices == DigitizerDevices::Both) {
+        collections.push_back({kUsageTouchPad, L"touchpad"});
+    }
+    if (devices == DigitizerDevices::Touchscreen || devices == DigitizerDevices::Both) {
+        collections.push_back({kUsageTouchScreen, L"touchscreen"});
+    }
 
     bool registeredAny = false;
 
@@ -103,6 +108,7 @@ void RawInputSource::Unregister() {
     CancelActive();
 
     if (registered_) {
+        // Removing a registration that was never made is harmless.
         const USAGE usages[] = {kUsageTouchPad, kUsageTouchScreen};
         for (USAGE usage : usages) {
             RAWINPUTDEVICE device{};

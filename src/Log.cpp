@@ -125,13 +125,10 @@ void ShutdownLogging() {
     g_bytesOnDisk = 0;
 }
 
-void LogMessage(LogLevel level, const std::wstring& message) {
-    std::lock_guard lock(g_logMutex);
+namespace {
 
-    if (level == LogLevel::Debug && !g_debugEnabled) {
-        return;
-    }
-
+// Caller holds g_logMutex.
+void WriteEntry(LogLevel level, const std::wstring& message) {
     SYSTEMTIME now{};
     GetLocalTime(&now);
 
@@ -162,6 +159,35 @@ void LogMessage(LogLevel level, const std::wstring& message) {
                   nullptr)) {
         g_bytesOnDisk += written;
     }
+}
+
+} // namespace
+
+void LogMessage(LogLevel level, const std::wstring& message) {
+    std::lock_guard lock(g_logMutex);
+
+    if (level == LogLevel::Debug && !g_debugEnabled) {
+        return;
+    }
+
+    WriteEntry(level, message);
+}
+
+void LogMessageBestEffort(LogLevel level, const std::wstring& message) {
+    std::unique_lock lock(g_logMutex, std::try_to_lock);
+    if (!lock.owns_lock()) {
+        std::wstring debugLine = message;
+        debugLine.push_back(static_cast<wchar_t>(13));
+        debugLine.push_back(static_cast<wchar_t>(10));
+        OutputDebugStringW(debugLine.c_str());
+        return;
+    }
+
+    if (level == LogLevel::Debug && !g_debugEnabled) {
+        return;
+    }
+
+    WriteEntry(level, message);
 }
 
 void LogFormat(LogLevel level, const wchar_t* format, ...) {

@@ -20,11 +20,13 @@ namespace {
 // ---------------------------------------------------------------------------
 // Default / canonical configuration text.
 //
-// The same generator is used for the first-run file and for the one-time
-// migration of a configuration written by a release that still had a
-// [brightness] section.  Every comment therefore always describes the current
-// behaviour, and a migration preserves whatever values the user had set.
+// The same generator is used for the first-run file, for the one-time
+// migration of a release that still had a [brightness] section, and for the
+// settings dialog.  Every comment therefore always describes the current
+// behaviour.
 // ---------------------------------------------------------------------------
+
+constexpr int kConfigVersion = 2;
 
 struct ConfigText {
     int leftWidth = 10;
@@ -38,8 +40,42 @@ struct ConfigText {
     bool invertVolume = false;
     bool invertBrightness = false;
     bool invertMedia = false;
+    bool taps = true;
+    int cooldown = 150;
+    int minVolume = 0;
+    int maxVolume = 100;
+    int minBrightness = 5;
+    int maxBrightness = 100;
+    DigitizerDevices devices = DigitizerDevices::Touchpad;
+    BrightnessTargets targets = BrightnessTargets::All;
+    bool showPercentage = true;
+    bool startWithWindows = true;
     bool debug = false;
 };
+
+const wchar_t* DevicesToText(DigitizerDevices devices) {
+    switch (devices) {
+    case DigitizerDevices::Touchscreen:
+        return L"touchscreen";
+    case DigitizerDevices::Both:
+        return L"both";
+    case DigitizerDevices::Touchpad:
+        break;
+    }
+    return L"touchpad";
+}
+
+const wchar_t* TargetsToText(BrightnessTargets targets) {
+    switch (targets) {
+    case BrightnessTargets::Primary:
+        return L"primary";
+    case BrightnessTargets::Internal:
+        return L"internal";
+    case BrightnessTargets::All:
+        break;
+    }
+    return L"all";
+}
 
 std::wstring BuildConfigText(const ConfigText& values) {
     std::wstring text;
@@ -81,14 +117,44 @@ std::wstring BuildConfigText(const ConfigText& values) {
     line(L"; Horizontal travel per media step on the top edge, in percent (2-50).");
     line(L"; The left and right edges are absolute and do not use this value.");
     line(L"step=" + decimal(values.step));
+    line(L"; Tap the edge instead of sliding: left = mute, top = play/pause,");
+    line(L"; right = turn the display off.");
+    line(L"taps=" + flag(values.taps));
+    line(L"; Pause (milliseconds, 0-2000) before a gesture is accepted again after");
+    line(L"; one was cancelled by a second finger.");
+    line(L"cooldown=" + number(values.cooldown));
     line(L"; Set to 1 to reverse an axis (100% at the bottom instead of the top).");
     line(L"invert_volume=" + flag(values.invertVolume));
     line(L"invert_brightness=" + flag(values.invertBrightness));
     line(L"invert_media=" + flag(values.invertMedia));
     line(L"");
+    line(L"[safety]");
+    line(L"; Output range clamps in percent.  Keep a brightness floor: many panels");
+    line(L"; go completely black at 0.");
+    line(L"min_volume=" + number(values.minVolume));
+    line(L"max_volume=" + number(values.maxVolume));
+    line(L"min_brightness=" + number(values.minBrightness));
+    line(L"max_brightness=" + number(values.maxBrightness));
+    line(L"");
+    line(L"[display]");
+    line(L"; Which displays the brightness edge drives: all, primary or internal.");
+    line(L"brightness_targets=" + std::wstring(TargetsToText(values.targets)));
+    line(L"");
     line(L"[input]");
+    line(L"; Which digitizer to listen to: touchpad, touchscreen or both.");
+    line(L"devices=" + std::wstring(DevicesToText(values.devices)));
     line(L"; Set to 1 to log raw device information and per-action diagnostics.");
     line(L"debug=" + flag(values.debug));
+    line(L"");
+    line(L"[osd]");
+    line(L"; Show the numeric percentage next to the level bar.");
+    line(L"show_percentage=" + flag(values.showPercentage));
+    line(L"");
+    line(L"[general]");
+    line(L"; Start the managed copy when you sign in.");
+    line(L"start_with_windows=" + flag(values.startWithWindows));
+    line(L"; Written by the program; used to migrate older files.");
+    line(L"config_version=" + number(kConfigVersion));
 
     return text;
 }
@@ -107,23 +173,51 @@ ConfigText ToConfigText(const AppConfig& config) {
     values.invertVolume = gestures.invertVolume;
     values.invertBrightness = gestures.invertBrightness;
     values.invertMedia = gestures.invertMedia;
+    values.taps = gestures.tapsEnabled;
+    values.cooldown = gestures.cooldownMs;
+    values.minVolume = gestures.minVolumePercent;
+    values.maxVolume = gestures.maxVolumePercent;
+    values.minBrightness = gestures.minBrightnessPercent;
+    values.maxBrightness = gestures.maxBrightnessPercent;
+    values.devices = config.devices;
+    values.targets = config.brightnessTargets;
+    values.showPercentage = config.osdShowPercentage;
+    values.startWithWindows = config.startWithWindows;
     values.debug = config.debugLogging;
     return values;
 }
 
 bool WriteConfigFile(const std::filesystem::path& path, const std::wstring& text) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    if (!file) {
-        return false;
+    // Write through a temporary file so a watcher or a crash never sees a
+    // half-written INI, then replace the original.
+    std::filesystem::path temporary = path;
+    temporary += L".tmp";
+
+    {
+        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
+        if (!file) {
+            return false;
+        }
+
+        // GetPrivateProfile* understand UTF-16 INI files with a BOM.
+        const unsigned char bom[] = {0xFF, 0xFE};
+        file.write(reinterpret_cast<const char*>(bom), sizeof(bom));
+        file.write(reinterpret_cast<const char*>(text.data()),
+                   static_cast<std::streamsize>(text.size() * sizeof(wchar_t)));
+        file.flush();
+        if (!file.good()) {
+            std::error_code cleanup;
+            std::filesystem::remove(temporary, cleanup);
+            return false;
+        }
     }
 
-    // GetPrivateProfile* understand UTF-16 INI files with a BOM.
-    const unsigned char bom[] = {0xFF, 0xFE};
-    file.write(reinterpret_cast<const char*>(bom), sizeof(bom));
-    file.write(reinterpret_cast<const char*>(text.data()),
-               static_cast<std::streamsize>(text.size() * sizeof(wchar_t)));
-    file.flush();
-    return file.good();
+    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        std::error_code cleanup;
+        std::filesystem::remove(temporary, cleanup);
+        return false;
+    }
+    return true;
 }
 
 bool HasSection(const wchar_t* section, const std::filesystem::path& file) {
@@ -179,6 +273,20 @@ float ReadFloat(const wchar_t* section, const wchar_t* key, float fallback,
     return (end == buffer) ? fallback : value;
 }
 
+std::wstring ReadString(const wchar_t* section, const wchar_t* key,
+                        const wchar_t* fallback,
+                        const std::filesystem::path& file) {
+    wchar_t buffer[64]{};
+    GetPrivateProfileStringW(section, key, fallback, buffer,
+                             static_cast<DWORD>(std::size(buffer)), file.c_str());
+
+    std::wstring value(buffer);
+    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t character) {
+        return static_cast<wchar_t>(std::towlower(character));
+    });
+    return value;
+}
+
 bool ReadBool(const wchar_t* section, const wchar_t* key, bool fallback,
               const std::filesystem::path& file) {
     const wchar_t* defaultValue = fallback ? L"1" : L"0";
@@ -192,6 +300,29 @@ bool ReadBool(const wchar_t* section, const wchar_t* key, bool fallback,
     });
 
     return value == L"1" || value == L"true" || value == L"yes" || value == L"on";
+}
+
+DigitizerDevices ReadDevices(const std::filesystem::path& file) {
+    const std::wstring value = ReadString(L"input", L"devices", L"touchpad", file);
+    if (value == L"touchscreen" || value == L"screen" || value == L"2") {
+        return DigitizerDevices::Touchscreen;
+    }
+    if (value == L"both" || value == L"all" || value == L"3") {
+        return DigitizerDevices::Both;
+    }
+    return DigitizerDevices::Touchpad;
+}
+
+BrightnessTargets ReadTargets(const std::filesystem::path& file) {
+    const std::wstring value =
+        ReadString(L"display", L"brightness_targets", L"all", file);
+    if (value == L"primary" || value == L"1") {
+        return BrightnessTargets::Primary;
+    }
+    if (value == L"internal" || value == L"laptop" || value == L"2") {
+        return BrightnessTargets::Internal;
+    }
+    return BrightnessTargets::All;
 }
 
 std::filesystem::path ExecutableDirectory() {
@@ -251,6 +382,10 @@ AppConfig ParseConfig(const std::filesystem::path& path) {
         ClampValue(ReadFloat(L"gestures", L"step", 10.0f, path) / 100.0f,
                    0.02f, 0.50f);
 
+    gestures.tapsEnabled = ReadBool(L"gestures", L"taps", true, path);
+    gestures.cooldownMs = std::clamp(ReadInt(L"gestures", L"cooldown", 150, path),
+                                     0, 2000);
+
     gestures.leftEnabled = ReadBool(L"zones", L"enable_left", true, path);
     gestures.rightEnabled = ReadBool(L"zones", L"enable_right", true, path);
     gestures.topEnabled = ReadBool(L"zones", L"enable_top", true, path);
@@ -259,6 +394,25 @@ AppConfig ParseConfig(const std::filesystem::path& path) {
     gestures.invertBrightness = ReadBool(L"gestures", L"invert_brightness", false, path);
     gestures.invertMedia = ReadBool(L"gestures", L"invert_media", false, path);
 
+    gestures.minVolumePercent = std::clamp(ReadInt(L"safety", L"min_volume", 0, path),
+                                           0, 100);
+    gestures.maxVolumePercent =
+        std::clamp(ReadInt(L"safety", L"max_volume", 100, path), 0, 100);
+    gestures.minBrightnessPercent =
+        std::clamp(ReadInt(L"safety", L"min_brightness", 5, path), 0, 100);
+    gestures.maxBrightnessPercent =
+        std::clamp(ReadInt(L"safety", L"max_brightness", 100, path), 0, 100);
+    if (gestures.minVolumePercent > gestures.maxVolumePercent) {
+        std::swap(gestures.minVolumePercent, gestures.maxVolumePercent);
+    }
+    if (gestures.minBrightnessPercent > gestures.maxBrightnessPercent) {
+        std::swap(gestures.minBrightnessPercent, gestures.maxBrightnessPercent);
+    }
+
+    parsed.devices = ReadDevices(path);
+    parsed.brightnessTargets = ReadTargets(path);
+    parsed.osdShowPercentage = ReadBool(L"osd", L"show_percentage", true, path);
+    parsed.startWithWindows = ReadBool(L"general", L"start_with_windows", true, path);
     parsed.debugLogging = ReadBool(L"input", L"debug", false, path);
     return parsed;
 }
@@ -294,7 +448,7 @@ AppConfig LoadConfig(const std::filesystem::path& path) {
 
     AppConfig config = ParseConfig(path);
 
-    // Releases before 1.0.0 stored a [brightness] step size that no longer
+    // Releases before 1.1.0 stored a [brightness] step size that no longer
     // exists.  Rewrite such a file with the current template so its comments
     // match what the program actually does; the parsed values are preserved.
     // The file is parsed again so the rewritten file is the single source of
@@ -309,6 +463,22 @@ AppConfig LoadConfig(const std::filesystem::path& path) {
     }
 
     return config;
+}
+
+bool SaveConfig(const std::filesystem::path& path, const AppConfig& config) {
+    if (path.has_parent_path()) {
+        std::error_code error;
+        std::filesystem::create_directories(path.parent_path(), error);
+    }
+
+    const bool written = WriteConfigFile(path, BuildConfigText(ToConfigText(config)));
+    if (written) {
+        LogFormat(LogLevel::Info, L"Configuration: saved \"%ls\".", path.c_str());
+    } else {
+        LogFormat(LogLevel::Warning, L"Configuration: could not save \"%ls\".",
+                  path.c_str());
+    }
+    return written;
 }
 
 // ---------------------------------------------------------------------------
