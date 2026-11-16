@@ -11,3 +11,7 @@
 *.user
 Thumbs.db
 desktop.ini
+
+# Python bytecode (icon generator)
+__pycache__/
+*.pyc
