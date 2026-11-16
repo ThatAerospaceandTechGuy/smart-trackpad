@@ -1,0 +1,18 @@
+# Matches the existing style: 4 spaces, 90 columns, pointers on the left.
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++20
+ColumnLimit: 90
+IndentWidth: 4
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+DerivePointerAlignment: false
+PointerAlignment: Left
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Never
+BreakBeforeBraces: Attach
+IncludeBlocks: Preserve
+SortIncludes: Never
+SpaceBeforeParens: ControlStatements

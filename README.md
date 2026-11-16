@@ -6,8 +6,11 @@ Windows touchpad into hardware controls:
 | Zone | Gesture | Action |
 | --- | --- | --- |
 | Left edge (0-10% width) | Touch/slide | Absolute volume: bottom = 0%, top = 100% |
+| Left edge | Tap | Toggle mute |
 | Right edge (90-100% width) | Touch/slide | Absolute brightness: bottom = 0%, top = 100% |
+| Right edge | Tap | Turn the display off (optional) |
 | Top edge (0-10% height) | Slide right / left | Next / previous track (one per 10% travel) |
+| Top edge | Tap | Play / pause |
 
 Coordinates are normalized to the touchpad surface:
 
@@ -30,10 +33,11 @@ this bottom-up space before the gesture engine sees it.
 
 Only one contact is tracked. A second finger cancels the gesture; after a
 multi-finger report the pad must be fully released before a new edge gesture
-can start. A gesture latches to its zone once activated, so the finger may
-drift away from the edge while the control keeps working. Corners are
-disambiguated by the dominant axis of the first movement: vertical in the
-top-left corner controls volume, horizontal controls media.
+can start, and a short cooldown stops a resting palm from re-triggering. A
+gesture latches to its zone once activated, so the finger may drift away from
+the edge while the control keeps working. Corners are disambiguated by the
+dominant axis of the first movement: vertical in the top-left corner controls
+volume, horizontal controls media, and a tap resolves to the vertical edge.
 
 The left and right edges are **absolute sliders**. After the activation
 threshold is crossed, the contact's height maps directly to 0-100% volume or
@@ -47,11 +51,12 @@ A compact Windows 11-style overlay appears at the bottom center of the display
 the pointer is on while either absolute edge is adjusted. It shows the matching
 speaker or sun icon, a live accent-colored level bar, and the percentage, then
 fades after two seconds. The overlay is click-through, DPI-scaled, and follows
-the system light/dark theme and accent color. It is drawn by the app because
-Windows exposes no public API for showing its native brightness HUD. The
-overlay first shows the requested value (so the gesture feels immediate) and
-then converges on what the hardware reports: a quantized step, a muted
-endpoint, or a backend that refused the write.
+the system light/dark theme, accent color, high-contrast palette and the
+"show animations" accessibility setting. It is drawn by the app because Windows
+exposes no public API for showing its native brightness HUD. The overlay first
+shows the requested value (so the gesture feels immediate) and then converges on
+what the hardware reports: a quantized step, a muted endpoint, or a backend that
+refused the write.
 
 ## Build
 
@@ -69,12 +74,13 @@ Release build links the MSVC runtime statically, so it does not need a separate
 Visual C++ redistributable.
 
 The icon (`src/app.ico`, regenerate with `python tools/make_icon.py`), the
-version block and the embedded manifest (PerMonitorV2 DPI awareness, long
-paths, `asInvoker`) are compiled from `src/Resources.rc` and `src/app.manifest`.
+version block, the user-visible strings and the settings dialog template are
+compiled from `src/Resources.rc`; the embedded manifest (PerMonitorV2 DPI
+awareness, long paths, `asInvoker`) comes from `src/app.manifest`.
 
-Three self-contained test binaries ship with the project; the gesture engine,
-the HID decoding helpers and the configuration parser have no Win32 UI
-dependencies:
+Five self-contained test binaries ship with the project; the gesture engine,
+the HID decoding helpers, the contact lifecycle, the configuration parser and
+the path helpers have no Win32 UI dependencies:
 
 ```powershell
 ctest --test-dir build -C Release --output-on-failure
@@ -82,26 +88,42 @@ ctest --test-dir build -C Release --output-on-failure
 
 | Test | Covers |
 | --- | --- |
-| `gesture_engine` | Zone selection, latching, absolute sliders, media steps, inversion |
+| `gesture_engine` | Zone selection, latching, absolute sliders, media steps, taps, cooldown, clamps, inversion |
 | `hid_decode` | Sign extension, logical-range normalization, contact-state combination |
-| `config` | Defaults, clamping, malformed values, legacy-schema migration |
+| `contact_tracker` | Down/move/up, multi-finger cancel, blocked-until-release, device removal |
+| `config` | Defaults, clamping, malformed values, legacy-schema migration, save round-trip |
+| `path_compare` | Path identity and timestamp comparison used by the installer handover |
 
-(If CMake is not on `PATH`, use the `ctest.exe` from the same Visual Studio
-directory as `cmake.exe`.)
+`.github/workflows/build.yml` builds Debug and Release and runs the tests on
+every push, and publishes a zip on version tags.
 
 ## Run
 
 Start `SmartTrackpad.exe` (no administrator rights required). On launch it
 ensures a managed copy exists at
 `%LOCALAPPDATA%\SmartTrackpad\SmartTrackpad.exe`, updates that copy when the
-launched executable is newer, repairs the per-user Startup shortcut, and then
-**hands over to the managed copy** - so the process that keeps running is
-always the file the Startup shortcut launches. All data is per-user; no
-elevation is requested. A tray icon appears with:
+launched executable is newer, repairs the per-user Startup shortcut (or removes
+it, depending on the configuration), and then **hands over to the managed
+copy** - so the process that keeps running is always the file the Startup
+shortcut launches. All data is per-user; no elevation is requested.
+
+Command-line switches are forwarded to the running instance when one exists:
+
+```powershell
+SmartTrackpad.exe --settings     # open the settings dialog
+SmartTrackpad.exe --zone-test    # open the zone test window
+```
+
+The tray icon offers:
 
 * **Edge gestures** - enable/disable without exiting.
-* **Open configuration...** - edit the INI; saving reloads it.
-* **Open log...** - diagnostics from the last run.
+* **Settings...** - edit everything with sliders instead of the INI file.
+* **Zone test...** - see the pad, the bands and the live contact.
+* **Reload configuration** / **Open configuration...** / **Open log...**
+* **Copy log path** / **Open data folder**
+* **Start with Windows** - create or remove the Startup shortcut.
+* **About Smart Trackpad** - version and file locations.
+* **Uninstall...** - remove the Startup shortcut and the installed copy.
 * **Exit**.
 
 Only one instance can run at a time (a local named mutex enforces this).
@@ -115,9 +137,10 @@ Created on first launch at:
 ```
 
 Log file: `%LOCALAPPDATA%\SmartTrackpad\smarttrackpad.log` (rotated to
-`smarttrackpad.log.old` as soon as it passes 1 MiB, while running).
-If `LOCALAPPDATA` is unavailable, both live under a `SmartTrackpad` folder next
-to the executable.
+`smarttrackpad.log.old` as soon as it passes 1 MiB, while running). A crash
+writes a `crash-<timestamp>.dmp` minidump next to the log.
+If `LOCALAPPDATA` is unavailable, everything lives under a `SmartTrackpad`
+folder next to the executable.
 
 ```ini
 [zones]
@@ -131,12 +154,31 @@ enable_top=1
 [gestures]
 activation=2.0         ; percent of travel before a zone is recognized (0.2-10)
 step=10.0              ; horizontal travel per media step (2-50)
+taps=1                 ; tap the left edge to mute, the top to play/pause
+cooldown=150           ; ms before a gesture is accepted after a cancel (0-2000)
 invert_volume=0        ; 100% at the bottom, 0% at the top
 invert_brightness=0    ; 100% at the bottom, 0% at the top
 invert_media=0
 
+[safety]
+min_volume=0           ; output clamps in percent
+max_volume=100
+min_brightness=5       ; keep a floor: many panels go black at 0
+max_brightness=100
+
+[display]
+brightness_targets=all ; all | primary | internal
+
 [input]
+devices=touchpad       ; touchpad | touchscreen | both
 debug=0                ; verbose HID/action diagnostics in the log
+
+[osd]
+show_percentage=1      ; 0 = icon and level bar only
+
+[general]
+start_with_windows=1
+config_version=2
 ```
 
 Out-of-range values are clamped to the ranges above; values that are not
@@ -147,7 +189,8 @@ position to 0-100%. `step` applies only to the top media edge.
 **Live reload.** Saving the file applies the new values to the running
 instance; no restart is needed. Saves are debounced, so an editor that writes
 the file several times produces one reload. A `debug` change takes effect
-immediately because the log is re-opened.
+immediately because the log is re-opened. The settings dialog writes the same
+file, so both ways of editing stay in sync.
 
 **Migration.** Releases before 1.1.0 had a `[brightness] step_percent` section.
 Such a file is rewritten once with the current template: every user value is
@@ -157,62 +200,78 @@ current behaviour.
 ## Implementation
 
 ```
-WM_INPUT  ->  RawInputSource  ->  GestureEngine  ->  ActionDispatcher
-              (HID parsing)      (zone logic)       (Core Audio / DDC-WMI / media keys)
+WM_INPUT  ->  RawInputSource  ->  ContactTracker  ->  GestureEngine  ->  ActionDispatcher
+              (HID parsing)      (one contact)       (zone logic)       (Core Audio / DDC-WMI / keys)
 ```
 
 * **`App`** creates the required hidden message-only window (`HWND_MESSAGE`)
   and runs a single `GetMessage` loop. There is no polling: input arrives as
-  `WM_INPUT`, device changes as `WM_INPUT_DEVICE_CHANGE`, and configuration
-  changes as a message posted by the watcher.
-* **`RawInputSource`** registers the HID top-level collections for Touch Pad
-  and Touch Screen (usage page `0x0D`, usages `0x05` / `0x04`) with
+  `WM_INPUT`, device changes as `WM_INPUT_DEVICE_CHANGE`, configuration changes
+  as a message posted by the watcher, and session lock/unlock notifications
+  from `WTSRegisterSessionNotification`.
+* **`RawInputSource`** registers the requested HID top-level collections for
+  Touch Pad and Touch Screen (usage page `0x0D`, usages `0x05` / `0x04`) with
   `RIDEV_INPUTSINK | RIDEV_DEVNOTIFY`. Each device's preparsed data is cached
   once; reports are decoded with `HidP_GetUsageValue` (X/Y, contact count) and
   `HidP_GetUsages` (tip switches). Coordinates are normalized with the logical
   minimum/maximum from the HID value capabilities, including sign-extension
   for signed ranges. The HID Y axis is inverted so the engine receives
-  bottom-up coordinates. The numeric parts of that work live in
-  **`HidDecode`** (`SignExtend`, `NormalizeValue`, `CombineContactSignals`) and
-  are unit tested without a touchpad attached.
+  bottom-up coordinates. The numeric parts live in **`HidDecode`**
+  (`SignExtend`, `NormalizeValue`, `CombineContactSignals`) and are unit tested
+  without a touchpad attached.
+* **`ContactTracker`** owns the contact lifecycle: one tracked contact, a
+  multi-finger report cancels and blocks the device until it is fully released,
+  a positionless report from a digitizer without a tip switch counts as a lift,
+  and a second device cannot hijack an active gesture. Unit tested.
 * **`GestureEngine`** is a pure state machine (`Idle`, `Pending`, `Active`,
-  `Blocked`). It selects the zone from the starting point, requires the
-  dominant axis to match the zone, then reports the absolute height for the
-  left/right edges. The top edge discards activation travel and quantizes
-  horizontal travel into media steps (capped per report to absorb HID
-  glitches).
+  `Blocked`) with an injected clock. It selects the zone from the starting
+  point, requires the dominant axis to match the zone, reports the absolute
+  height for the left/right edges, quantizes top-edge travel into media steps
+  (capped per report to absorb HID glitches), turns a short contact inside a
+  band into a tap, and enforces the cooldown and output clamps.
 * **`VolumeController`** owns a `std::jthread` with a condition variable.
   It initializes COM as an MTA on that worker, opens the default multimedia
   render endpoint with `IMMDeviceEnumerator`, activates
-  `IAudioEndpointVolume`, and applies
-  `SetMasterVolumeLevelScalar`. Requests are coalesced; if the output device
-  changes, the cached endpoint is dropped and re-opened on the next update.
-  The level and mute state are read back so the overlay shows the real value.
+  `IAudioEndpointVolume`, and applies `SetMasterVolumeLevelScalar` (or flips
+  `SetMute`). Requests are coalesced; if the output device changes, the cached
+  endpoint is dropped and re-opened on the next update. The level and mute state
+  are read back so the overlay shows the real value.
 * **`BrightnessController`** uses the same asynchronous pattern and drives
-  **both** backends: every MCCS-capable monitor found with
-  `EnumDisplayMonitors` + `GetPhysicalMonitorsFromHMONITOR` is set with
-  `SetMonitorBrightness`, and the WMI `root\wmi`
-  `WmiMonitorBrightnessMethods::WmiSetBrightness` provider is applied
-  additionally for an internal laptop panel. A laptop with an external screen
-  attached therefore moves both displays at once instead of only one of them.
-  COM is initialized and released entirely on that worker thread.
+  both backends: every MCCS-capable monitor found with `EnumDisplayMonitors` +
+  `GetPhysicalMonitorsFromHMONITOR` is set with `SetMonitorBrightness`, and the
+  WMI `root\wmi` `WmiMonitorBrightnessMethods::WmiSetBrightness` provider is
+  applied additionally for an internal laptop panel. `[display]` narrows that
+  to the primary display or the internal panel. COM is initialized and released
+  entirely on that worker thread.
 * **`ConfigWatcher`** holds one overlapped `ReadDirectoryChangesW` on the data
   directory, posts a single reload per save (300 ms quiet period) and is
   stopped with a stop-token callback that wakes the pending read.
-* **`ActionDispatcher`** injects media keys with `SendInput` and forwards
-  absolute volume/brightness values to their controllers and the overlay. Slow
-  audio/display operations never run on the message loop. Controller workers
-  report the confirmed level back with `Osd::Post`, which marshals into the UI
-  thread by `PostMessage`.
+* **`ActionDispatcher`** injects media keys with `SendInput`, toggles mute,
+  powers the display off for a tap, and forwards absolute volume/brightness
+  values to their controllers and the overlay. Slow audio/display operations
+  never run on the message loop. Controller workers report the confirmed level
+  back with `Osd::Post`, which marshals into the UI thread by `PostMessage`.
 * **`Osd`** owns a layered, click-through topmost window modeled on the
   measured Windows 11 hardware indicator (192x48 DIP card, 8 DIP corners,
-  live accent fill, value text). It reads the system theme and accent palette
-  so it follows Personalization changes, uses per-monitor DPI scaling, follows
-  the monitor under the pointer, and fades with a short timer. It shows no
-  window while idle and adds no polling or worker thread.
+  live accent fill, value text). It reads the system theme and accent palette,
+  falls back to the high-contrast system colors, uses per-monitor DPI scaling,
+  follows the monitor under the pointer, and fades with a short timer (or snaps
+  when animations are disabled).
+* **`Settings`** is a modal dialog driven by a table of slider bindings; it
+  reads and writes `AppConfig` and the caller saves the INI and applies the
+  values live.
+* **`Diagnostics`** is the zone test window: a double-buffered GDI canvas that
+  draws the pad surface, the configured bands, the live contact and the counters
+  fed by the gesture callbacks.
+* **`Install`** manages the managed copy, the Startup shortcut and removal;
+  **`PathCompare`** holds its file-identity and timestamp rules (unit tested).
+* **`CrashHandler`** logs unhandled exceptions, `std::terminate`, pure calls and
+  invalid CRT parameters and writes a minidump.
+* **`Strings`** loads every user-visible string from the `STRINGTABLE` with an
+  English fallback, so translating the product is a resource-only change.
 * **`Log`** is a mutex-protected UTF-8 file logger (also mirrored to
-  `OutputDebugString`); debug logs are gated by the `debug` setting and the
-  file is rotated while running, not only at startup.
+  `OutputDebugString`) with a non-blocking variant for crash paths; debug logs
+  are gated by the `debug` setting.
 
 RAII is used for the raw input registration, device preparsed buffers,
 physical monitor handles, COM/Core Audio interfaces, the single-instance
@@ -226,40 +285,38 @@ network access and no third-party dependencies.
   Windows Precision Touchpads deliver single-finger motion to normal Win32
   applications only as relative mouse input, because Windows owns the PTP
   collection; this app deliberately does not guess zones from relative mouse
-  deltas. On such systems the log records the registered collections, but no
-  gestures are produced. Accessing those reports requires an OEM filter driver
-  or a vendor API, which is outside a normal user-mode Win32 utility. Touch
-  screens that expose HID digitizer reports are accepted as well.
+  deltas. Use the zone test window to see what Windows reports. Accessing those
+  reports requires an OEM filter driver or a vendor API, which is outside a
+  normal user-mode Win32 utility. Touch screens are supported but disabled by
+  default (`[input] devices`) so a screen edge swipe does not change the system
+  volume.
 * **Volume uses the default playback device.** Core Audio changes the system
   master volume without injecting volume keys; the app-drawn overlay reports
   the level that the endpoint actually holds (including a muted endpoint), but
   Windows' own volume flyout is not invoked. If no render endpoint exists, the
-  log records a warning and the left edge has no effect. Mute state is left
-  untouched.
+  log records a warning and the left edge has no effect. A tap toggles mute.
 * **The overlay is an app-drawn clone.** It matches the Windows 11 indicator's
   geometry and visual treatment, but it is not a system HUD. Windows provides
   no supported method to display the native brightness indicator after an
   application changes the level; this is why the app renders its own.
 * **Brightness has two backends.** External monitors that implement MCCS are
   controlled through DDC/CI, and internal laptop panels through the WMI
-  `WmiMonitorBrightnessMethods` provider; both are written for every change.
-  If neither backend accepts the value the log contains a warning and the right
-  edge has no visible effect. WMI writes can be slower than DDC/CI; the worker
-  coalesces rapid slider movement.
+  `WmiMonitorBrightnessMethods` provider; both are written for every change
+  unless `[display]` narrows it. If neither backend accepts the value the log
+  contains a warning and the right edge has no visible effect. The right-edge
+  tap turns the display off (via `SC_MONITORPOWER`); any key or touch wakes it.
 * **No automatic driver installation.** The utility installs only its own
   per-user executable and Startup shortcut. It cannot safely install the
   correct signed touchpad driver for every laptop, and it deliberately does
-  not try to. A laptop whose driver exposes only relative mouse input remains
-  unsupported unless the OEM provides an absolute digitizer interface.
+  not try to.
 * **Media key injection.** `SendInput` media keys can be ignored by a locked
-  desktop or by applications that handle keys exclusively. The utility does
-  not need elevation and does not install a driver or service.
-* **Not verified against a live edge swipe here.** The build and unit tests
-  were run locally, and the Core Audio volume, WMI/DDC-CI brightness setters
-  and the overlay were exercised on the development laptop; actual touchpad
-  reports still depend on the HID descriptor supplied by the device. Enable
-  `debug=1` and inspect the log to see detected devices, usage pages, X/Y
-  ranges, reloads, and the volume/brightness backends in use.
-* The tray uses a separate hidden top-level window because the notification
-  area interacts poorly with message-only windows; the raw input window is
-  message-only as designed.
+  desktop or by applications that handle keys exclusively. Gestures are
+  suspended while the session is locked.
+* **Single contact only.** Two-finger fine adjustment is not implemented; a
+  second finger always cancels the gesture.
+* **Not verified against a live edge swipe everywhere.** The build and unit
+  tests run locally, and the Core Audio volume, WMI/DDC-CI brightness setters,
+  overlay, settings dialog and zone test window were exercised on the
+  development laptop; actual touchpad reports still depend on the HID
+  descriptor supplied by the device. Enable `debug=1` and inspect the log to see
+  detected devices, usage pages, X/Y ranges, reloads, and the backends in use.

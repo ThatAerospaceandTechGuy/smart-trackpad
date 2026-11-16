@@ -1,0 +1,74 @@
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: ${{ matrix.config }} build and tests
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
+
+      - name: Upload the executable
+        if: matrix.config == 'Release'
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartTrackpad-${{ github.sha }}
+          path: build/Release/SmartTrackpad.exe
+          if-no-files-found: error
+
+  release:
+    name: Publish release asset
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path CMakeLists.txt -Pattern 'VERSION ([\d.]+)' |
+            Select-Object -First 1).Matches[0].Groups[1].Value
+          $staging = "staging/SmartTrackpad-$version"
+          New-Item -ItemType Directory -Path $staging -Force | Out-Null
+          Copy-Item build/Release/SmartTrackpad.exe $staging
+          Copy-Item README.md, LICENSE, CHANGELOG.md $staging
+          Compress-Archive -Path $staging -DestinationPath "SmartTrackpad-$version.zip"
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: SmartTrackpad-*.zip
+          generate_release_notes: true
