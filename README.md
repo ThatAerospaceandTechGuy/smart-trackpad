@@ -1,8 +1,17 @@
 # Smart Trackpad
 
+[![build](https://github.com/ThatAerospaceandTechGuy/smart-trackpad/actions/workflows/build.yml/badge.svg)](https://github.com/ThatAerospaceandTechGuy/smart-trackpad/actions/workflows/build.yml)
+[![release](https://img.shields.io/github/v/release/ThatAerospaceandTechGuy/smart-trackpad)](https://github.com/ThatAerospaceandTechGuy/smart-trackpad/releases/latest)
+[![licence](https://img.shields.io/github/license/ThatAerospaceandTechGuy/smart-trackpad)](LICENSE)
+
 A small, event-driven background utility that turns the edges of a touchpad into
 hardware controls.  It runs on **Windows**, **macOS** and **Linux** from one
 shared gesture engine, one configuration file format and one set of tests.
+
+**Download:** [latest release](https://github.com/ThatAerospaceandTechGuy/smart-trackpad/releases/latest) -
+`SmartTrackpad-<version>-windows.zip`, `-macos.zip` (universal) and
+`-linux-x86_64.tar.gz`.  Or [build it](#build) from source in a couple of
+minutes.
 
 | Platform | Input | Volume | Brightness | Overlay | Menu |
 | --- | --- | --- | --- | --- | --- |
