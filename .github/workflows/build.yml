@@ -28,12 +28,22 @@ jobs:
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
 
-      - name: Upload the executable
+      - name: Build the installer
+        if: matrix.config == 'Release'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\SmartTrackpad.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+
+      - name: Upload the executable and installer
         if: matrix.config == 'Release'
         uses: actions/upload-artifact@v4
         with:
           name: SmartTrackpad-windows-${{ github.sha }}
-          path: build/Release/SmartTrackpad.exe
+          path: |
+            build/Release/SmartTrackpad.exe
+            dist/SmartTrackpad-*-setup.exe
           if-no-files-found: error
 
   linux:
@@ -42,7 +52,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # apt needs no build step of its own: the CMake target is the source of truth.
       - name: Install dependencies
         run: |
           sudo apt-get update
@@ -106,22 +115,58 @@ jobs:
 
       - name: Package
         run: |
+          set -eu
           version=$(sed -n 's/^project(SmartTrackpad VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
-          mkdir -p dist
+          echo "Packaging $version"
+          mkdir -p dist staging
+
           for platform in windows linux macos; do
             src="artifacts/SmartTrackpad-$platform-${GITHUB_SHA}"
-            if [ -d "$src" ]; then
-              mkdir -p "staging/SmartTrackpad-$version-$platform"
-              cp -R "$src"/. "staging/SmartTrackpad-$version-$platform/"
-              cp README.md LICENSE CHANGELOG.md "staging/SmartTrackpad-$version-$platform/"
-              (cd staging && zip -qr "../dist/SmartTrackpad-$version-$platform.zip" \
-                 "SmartTrackpad-$version-$platform")
+            if [ ! -d "$src" ]; then
+              echo "::warning::no $platform artifact, skipping"
+              continue
+            fi
+
+            dir="staging/SmartTrackpad-$version-$platform"
+            rm -rf "$dir"
+            mkdir -p "$dir"
+
+            # upload-artifact strips the top directory of the uploaded path, so a
+            # macOS bundle arrives as Contents/... and has to be put back inside
+            # SmartTrackpad.app for the archive to be a usable app.
+            if [ "$platform" = macos ] && [ ! -d "$src/SmartTrackpad.app" ]; then
+              bundle="$dir/SmartTrackpad.app"
+              mkdir -p "$bundle"
+              cp -R "$src"/. "$bundle"/
+            else
+              cp -R "$src"/. "$dir"/
+            fi
+
+            cp README.md LICENSE CHANGELOG.md "$dir"/
+
+            case "$platform" in
+              linux)
+                tar -C "$dir" -czf "dist/SmartTrackpad-$version-linux-x86_64.tar.gz" .
+                ;;
+              *)
+                (cd "$dir" && zip -qry "$OLDPWD/dist/SmartTrackpad-$version-$platform.zip" .)
+                ;;
+            esac
+          done
+
+          # Every archive must contain something substantial.
+          for archive in dist/*; do
+            size=$(stat -c%s "$archive")
+            echo "$archive: $size bytes"
+            if [ "$size" -lt 20000 ]; then
+              echo "::error::$archive looks truncated"
+              exit 1
             fi
           done
-          ls -l dist
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/SmartTrackpad-*.zip
-          generate_release_notes: true
+          files: dist/SmartTrackpad-*
+          overwrite_files: true
+          generate_release_notes: false
