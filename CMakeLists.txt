@@ -13,41 +13,50 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # Resource compiler for the icon, version block and (MSVC) the manifest.
 enable_language(RC)
 
+set(SMARTTRACKPAD_COMMON_SOURCES
+    src/common/Config.cpp
+    src/common/ContactTracker.cpp
+    src/common/GestureEngine.cpp
+    src/common/HidDecode.cpp
+    src/common/IniFile.cpp
+    src/common/Log.cpp
+    src/common/PathCompare.cpp
+    src/common/Platform.cpp
+    src/common/Text.cpp
+)
+
 set(SMARTTRACKPAD_SOURCES
-    src/main.cpp
-    src/App.cpp
-    src/Actions.cpp
-    src/Brightness.cpp
-    src/Config.cpp
-    src/ContactTracker.cpp
-    src/CrashHandler.cpp
-    src/Diagnostics.cpp
-    src/GestureEngine.cpp
-    src/HidDecode.cpp
-    src/Install.cpp
-    src/Log.cpp
-    src/Osd.cpp
-    src/PathCompare.cpp
-    src/RawInput.cpp
-    src/Settings.cpp
-    src/Strings.cpp
-    src/TrayIcon.cpp
-    src/Volume.cpp
-    src/Resources.rc
+    src/windows/main.cpp
+    src/windows/App.cpp
+    src/windows/Actions.cpp
+    src/windows/Brightness.cpp
+    src/windows/ConfigWatcherWin.cpp
+    src/windows/CrashHandler.cpp
+    src/windows/Diagnostics.cpp
+    src/windows/Install.cpp
+    src/windows/Osd.cpp
+    src/windows/RawInput.cpp
+    src/windows/Settings.cpp
+    src/windows/Strings.cpp
+    src/windows/TrayIcon.cpp
+    src/windows/Volume.cpp
+    src/windows/Resources.rc
+    ${SMARTTRACKPAD_COMMON_SOURCES}
 )
 
 add_executable(SmartTrackpad WIN32 ${SMARTTRACKPAD_SOURCES})
 
 if(MSVC)
     # Embedded application manifest (DPI awareness, long paths, asInvoker).
-    target_sources(SmartTrackpad PRIVATE src/app.manifest)
+    target_sources(SmartTrackpad PRIVATE src/windows/app.manifest)
 endif()
 
-target_include_directories(SmartTrackpad PRIVATE src)
+target_include_directories(SmartTrackpad PRIVATE src src/common src/windows)
 target_compile_features(SmartTrackpad PRIVATE cxx_std_20)
 target_compile_definitions(SmartTrackpad PRIVATE
     UNICODE
     _UNICODE
+    _CRT_SECURE_NO_WARNINGS
     WIN32_LEAN_AND_MEAN
     NOMINMAX
     SMARTTRACKPAD_VERSION=L"${PROJECT_VERSION}"
@@ -90,11 +99,12 @@ if(SMARTTRACKPAD_BUILD_TESTS)
     # with CTest under the target name.
     function(smarttrackpad_add_test name)
         add_executable(${name} ${ARGN})
-        target_include_directories(${name} PRIVATE src)
+        target_include_directories(${name} PRIVATE src src/common src/windows)
         target_compile_features(${name} PRIVATE cxx_std_20)
         target_compile_definitions(${name} PRIVATE
             UNICODE
             _UNICODE
+            _CRT_SECURE_NO_WARNINGS
             WIN32_LEAN_AND_MEAN
             NOMINMAX
         )
@@ -112,31 +122,34 @@ if(SMARTTRACKPAD_BUILD_TESTS)
     # Zone/gesture state machine (no Win32 dependency).
     smarttrackpad_add_test(gesture_engine
         tests/GestureEngineTests.cpp
-        src/GestureEngine.cpp
+        src/common/GestureEngine.cpp
     )
 
     # HID value decoding and contact-state combination.
     smarttrackpad_add_test(hid_decode
         tests/HidDecodeTests.cpp
-        src/HidDecode.cpp
+        src/common/HidDecode.cpp
     )
 
     # Path identity / timestamp rules used by the installer.
     smarttrackpad_add_test(path_compare
         tests/PathCompareTests.cpp
-        src/PathCompare.cpp
+        src/common/PathCompare.cpp
     )
 
     # Digitizer report lifecycle (one contact, multi-finger cancel, removal).
     smarttrackpad_add_test(contact_tracker
         tests/ContactTrackerTests.cpp
-        src/ContactTracker.cpp
+        src/common/ContactTracker.cpp
     )
 
     # INI parsing, clamping and legacy-schema migration.
     smarttrackpad_add_test(config
         tests/ConfigTests.cpp
-        src/Config.cpp
-        src/Log.cpp
+        src/common/Config.cpp
+        src/common/IniFile.cpp
+        src/common/Log.cpp
+        src/common/Platform.cpp
+        src/common/Text.cpp
     )
 endif()

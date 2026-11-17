@@ -4,6 +4,7 @@
 #include "Config.h"
 #include "Log.h"
 #include "PathCompare.h"
+#include "Platform.h"
 
 #include <windows.h>
 #include <knownfolders.h>
@@ -21,25 +22,6 @@ namespace {
 
 constexpr wchar_t kManagedExecutableName[] = L"SmartTrackpad.exe";
 constexpr wchar_t kStartupShortcutName[] = L"SmartTrackpad.lnk";
-
-std::filesystem::path ExecutablePath() {
-    std::wstring buffer(MAX_PATH, L'\0');
-
-    for (;;) {
-        const DWORD length = GetModuleFileNameW(
-            nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            return {};
-        }
-        if (length < buffer.size()) {
-            buffer.resize(length);
-            break;
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-
-    return std::filesystem::path(buffer);
-}
 
 std::filesystem::path StartupShortcutPath() {
     PWSTR startupFolder = nullptr;

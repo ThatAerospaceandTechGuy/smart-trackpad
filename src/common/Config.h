@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <memory>
 #include <functional>
 #include <string>
 #include <thread>
@@ -42,6 +43,9 @@ bool SaveConfig(const std::filesystem::path& path, const AppConfig& config);
 // Watches the configuration directory for writes to the INI file and invokes
 // the callback from a worker thread.  The callback is debounced so an editor
 // that performs several writes produces a single reload.
+//
+// Implemented per platform (ReadDirectoryChangesW, inotify, kqueue); the
+// header only exposes the portable shape.
 class ConfigWatcher {
 public:
     ConfigWatcher();
@@ -56,12 +60,8 @@ public:
 private:
     void Run(std::stop_token token);
 
-    // Opaque Win32 handles so this header stays free of <windows.h>.
-    void* directory_ = nullptr;
-    void* stopEvent_ = nullptr;
-    std::wstring fileName_;
-    std::function<void()> onChanged_;
-    std::jthread thread_;
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
 };
 
 } // namespace st

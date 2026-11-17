@@ -1,21 +1,30 @@
 #include "Log.h"
 
-#include <windows.h>
+#include "Text.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
+#include <cstdio>
+#include <cstdlib>
+#endif
+
+#include <chrono>
 #include <cstdarg>
 #include <cwchar>
+#include <ctime>
 #include <iterator>
 #include <mutex>
 #include <string>
-#include <system_error>
 #include <vector>
 
 namespace st {
 namespace {
 
 std::mutex g_logMutex;
-HANDLE g_logFile = INVALID_HANDLE_VALUE;
+std::FILE* g_logFile = nullptr;
 bool g_debugEnabled = false;
+bool g_echoToStderr = false;
 std::filesystem::path g_logPath;
 unsigned long long g_bytesOnDisk = 0;
 
@@ -38,53 +47,40 @@ const wchar_t* LevelTag(LogLevel level) {
     return L"???";
 }
 
-std::string ToUtf8(const std::wstring& text) {
-    if (text.empty()) {
-        return {};
-    }
-
-    const int byteCount = WideCharToMultiByte(CP_UTF8, 0, text.data(),
-                                              static_cast<int>(text.size()), nullptr, 0,
-                                              nullptr, nullptr);
-    if (byteCount <= 0) {
-        return {};
-    }
-
-    std::string utf8(static_cast<std::size_t>(byteCount), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, text.data(), static_cast<int>(text.size()),
-                        utf8.data(), byteCount, nullptr, nullptr);
-    return utf8;
-}
-
 // Opens the log file in append mode and records the current size so rotation
 // can happen without a separate stat call.  Caller holds g_logMutex.
 void OpenLogFile() {
-    g_logFile = CreateFileW(g_logPath.c_str(), FILE_APPEND_DATA,
-                            FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
-                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-
     g_bytesOnDisk = 0;
-    if (g_logFile == INVALID_HANDLE_VALUE) {
+#if defined(_WIN32)
+    g_logFile = _wfopen(g_logPath.c_str(), L"ab");
+#else
+    g_logFile = std::fopen(g_logPath.c_str(), "ab");
+#endif
+    if (g_logFile == nullptr) {
         return;
     }
 
-    LARGE_INTEGER size{};
-    if (GetFileSizeEx(g_logFile, &size) && size.QuadPart > 0) {
-        g_bytesOnDisk = static_cast<unsigned long long>(size.QuadPart);
+    std::error_code error;
+    const auto size = std::filesystem::file_size(g_logPath, error);
+    if (!error) {
+        g_bytesOnDisk = static_cast<unsigned long long>(size);
     }
 }
 
 // Closes the current file, moves it aside and starts a fresh one.
 // Caller holds g_logMutex.
 void RotateLogFile() {
-    if (g_logFile != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_logFile);
-        g_logFile = INVALID_HANDLE_VALUE;
+    if (g_logFile != nullptr) {
+        std::fclose(g_logFile);
+        g_logFile = nullptr;
     }
 
     std::filesystem::path backup = g_logPath;
     backup += L".old";
-    MoveFileExW(g_logPath.c_str(), backup.c_str(), MOVEFILE_REPLACE_EXISTING);
+
+    std::error_code error;
+    std::filesystem::remove(backup, error);
+    std::filesystem::rename(g_logPath, backup, error);
 
     OpenLogFile();
 }
@@ -97,15 +93,21 @@ void InitLogging(const std::filesystem::path& logPath, bool debugEnabled) {
     g_debugEnabled = debugEnabled;
     g_logPath = logPath;
 
-    if (g_logFile != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_logFile);
-        g_logFile = INVALID_HANDLE_VALUE;
+    if (g_logFile != nullptr) {
+        std::fclose(g_logFile);
+        g_logFile = nullptr;
     }
 
     if (logPath.has_parent_path()) {
         std::error_code error;
         std::filesystem::create_directories(logPath.parent_path(), error);
     }
+
+#if !defined(_WIN32)
+    if (const char* echo = std::getenv("SMARTTRACKPAD_ECHO"); echo != nullptr) {
+        g_echoToStderr = echo[0] != '\0' && echo[0] != '0';
+    }
+#endif
 
     OpenLogFile();
 
@@ -118,9 +120,9 @@ void InitLogging(const std::filesystem::path& logPath, bool debugEnabled) {
 void ShutdownLogging() {
     std::lock_guard lock(g_logMutex);
 
-    if (g_logFile != INVALID_HANDLE_VALUE) {
-        CloseHandle(g_logFile);
-        g_logFile = INVALID_HANDLE_VALUE;
+    if (g_logFile != nullptr) {
+        std::fclose(g_logFile);
+        g_logFile = nullptr;
     }
     g_bytesOnDisk = 0;
 }
@@ -129,36 +131,52 @@ namespace {
 
 // Caller holds g_logMutex.
 void WriteEntry(LogLevel level, const std::wstring& message) {
-    SYSTEMTIME now{};
-    GetLocalTime(&now);
+    const auto now = std::chrono::system_clock::now();
+    const std::time_t seconds = std::chrono::system_clock::to_time_t(now);
+    const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now.time_since_epoch())
+                            .count() %
+                        1000;
+
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &seconds);
+#else
+    localtime_r(&seconds, &local);
+#endif
 
     wchar_t prefix[96]{};
-    swprintf(prefix, std::size(prefix), L"[%04u-%02u-%02u %02u:%02u:%02u.%03u] [%ls] ",
-             now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond,
-             now.wMilliseconds, LevelTag(level));
+    swprintf(prefix, std::size(prefix),
+             L"[%04d-%02d-%02d %02d:%02d:%02d.%03d] [%ls] ", local.tm_year + 1900,
+             local.tm_mon + 1, local.tm_mday, local.tm_hour, local.tm_min, local.tm_sec,
+             static_cast<int>(millis), LevelTag(level));
 
     const std::wstring line = std::wstring(prefix) + message + L"\r\n";
+    const std::string utf8 = text::ToUtf8(line);
 
+#if defined(_WIN32)
     OutputDebugStringW(line.c_str());
-
-    if (g_logFile == INVALID_HANDLE_VALUE) {
-        return;
+#else
+    if (g_echoToStderr) {
+        std::fwrite(utf8.data(), 1, utf8.size(), stderr);
+        std::fflush(stderr);
     }
+#endif
 
-    const std::string utf8 = ToUtf8(line);
-    if (utf8.empty()) {
+    if (g_logFile == nullptr || utf8.empty()) {
         return;
     }
 
     if (g_bytesOnDisk > 0 && g_bytesOnDisk + utf8.size() > kMaxLogSize) {
         RotateLogFile();
+        if (g_logFile == nullptr) {
+            return;
+        }
     }
 
-    DWORD written = 0;
-    if (WriteFile(g_logFile, utf8.data(), static_cast<DWORD>(utf8.size()), &written,
-                  nullptr)) {
-        g_bytesOnDisk += written;
-    }
+    const std::size_t written = std::fwrite(utf8.data(), 1, utf8.size(), g_logFile);
+    std::fflush(g_logFile);
+    g_bytesOnDisk += written;
 }
 
 } // namespace
@@ -176,10 +194,17 @@ void LogMessage(LogLevel level, const std::wstring& message) {
 void LogMessageBestEffort(LogLevel level, const std::wstring& message) {
     std::unique_lock lock(g_logMutex, std::try_to_lock);
     if (!lock.owns_lock()) {
+        // The logger is busy, which is exactly what happens during a crash: put
+        // the line somewhere else instead of blocking.
         std::wstring debugLine = message;
         debugLine.push_back(static_cast<wchar_t>(13));
         debugLine.push_back(static_cast<wchar_t>(10));
+#if defined(_WIN32)
         OutputDebugStringW(debugLine.c_str());
+#else
+        const std::string utf8 = text::ToUtf8(debugLine);
+        std::fwrite(utf8.data(), 1, utf8.size(), stderr);
+#endif
         return;
     }
 
@@ -193,30 +218,29 @@ void LogMessageBestEffort(LogLevel level, const std::wstring& message) {
 void LogFormat(LogLevel level, const wchar_t* format, ...) {
     std::wstring message;
 
-#if defined(_MSC_VER)
     va_list arguments;
     va_start(arguments, format);
-    va_list sizing;
-    va_copy(sizing, arguments);
-    const int needed = _vscwprintf(format, sizing);
-    va_end(sizing);
 
-    if (needed < 0) {
-        message = format;
-    } else {
-        std::vector<wchar_t> buffer(static_cast<std::size_t>(needed) + 1, L'\0');
-        _vsnwprintf_s(buffer.data(), buffer.size(), _TRUNCATE, format, arguments);
-        message.assign(buffer.data());
+    // vswprintf needs a bounded buffer, so grow until the result fits.
+    std::vector<wchar_t> buffer(1024, L'\0');
+    for (;;) {
+        va_list attempt;
+        va_copy(attempt, arguments);
+        const int written = vswprintf(buffer.data(), buffer.size(), format, attempt);
+        va_end(attempt);
+
+        if (written >= 0) {
+            message.assign(buffer.data(), static_cast<std::size_t>(written));
+            break;
+        }
+        if (buffer.size() >= 64 * 1024) {
+            message = format;
+            break;
+        }
+        buffer.resize(buffer.size() * 2, L'\0');
     }
+
     va_end(arguments);
-#else
-    std::vector<wchar_t> buffer(4096, L'\0');
-    va_list arguments;
-    va_start(arguments, format);
-    std::vswprintf(buffer.data(), buffer.size(), format, arguments);
-    va_end(arguments);
-    message.assign(buffer.data());
-#endif
 
     LogMessage(level, message);
 }

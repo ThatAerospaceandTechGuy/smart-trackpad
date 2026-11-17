@@ -1,7 +1,5 @@
 #include "PathCompare.h"
 
-#include <windows.h>
-
 #include <filesystem>
 #include <system_error>
 
@@ -9,10 +7,17 @@ namespace st {
 
 bool SamePath(const std::filesystem::path& left,
               const std::filesystem::path& right) {
+#if defined(_WIN32)
+    // Windows paths are case-insensitive.
     if (_wcsicmp(left.lexically_normal().c_str(),
                  right.lexically_normal().c_str()) == 0) {
         return true;
     }
+#else
+    if (left.lexically_normal() == right.lexically_normal()) {
+        return true;
+    }
+#endif
 
     std::error_code error;
     if (std::filesystem::exists(left, error)) {

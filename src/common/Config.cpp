@@ -1,8 +1,9 @@
 #include "Config.h"
 
+#include "IniFile.h"
 #include "Log.h"
-
-#include <windows.h>
+#include "Platform.h"
+#include "Text.h"
 
 #include <algorithm>
 #include <cwchar>
@@ -188,44 +189,11 @@ ConfigText ToConfigText(const AppConfig& config) {
 }
 
 bool WriteConfigFile(const std::filesystem::path& path, const std::wstring& text) {
-    // Write through a temporary file so a watcher or a crash never sees a
-    // half-written INI, then replace the original.
-    std::filesystem::path temporary = path;
-    temporary += L".tmp";
-
-    {
-        std::ofstream file(temporary, std::ios::binary | std::ios::trunc);
-        if (!file) {
-            return false;
-        }
-
-        // GetPrivateProfile* understand UTF-16 INI files with a BOM.
-        const unsigned char bom[] = {0xFF, 0xFE};
-        file.write(reinterpret_cast<const char*>(bom), sizeof(bom));
-        file.write(reinterpret_cast<const char*>(text.data()),
-                   static_cast<std::streamsize>(text.size() * sizeof(wchar_t)));
-        file.flush();
-        if (!file.good()) {
-            std::error_code cleanup;
-            std::filesystem::remove(temporary, cleanup);
-            return false;
-        }
-    }
-
-    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-        std::error_code cleanup;
-        std::filesystem::remove(temporary, cleanup);
-        return false;
-    }
-    return true;
+    return WriteUtf8FileAtomic(path, text);
 }
 
 bool HasSection(const wchar_t* section, const std::filesystem::path& file) {
-    wchar_t buffer[16]{};
-    const DWORD copied =
-        GetPrivateProfileStringW(section, nullptr, L"", buffer,
-                                 static_cast<DWORD>(std::size(buffer)), file.c_str());
-    return copied > 0;
+    return HasProfileSection(section, file);
 }
 
 float ClampValue(float value, float low, float high) {
@@ -237,15 +205,13 @@ int ReadInt(const wchar_t* section, const wchar_t* key, int fallback,
     // Parsed by hand rather than with GetPrivateProfileIntW so a malformed
     // value falls back to the documented default instead of silently becoming
     // zero.
-    wchar_t buffer[64]{};
-    GetPrivateProfileStringW(section, key, L"", buffer,
-                             static_cast<DWORD>(std::size(buffer)), file.c_str());
+    const std::wstring buffer = ReadProfileString(section, key, L"", file);
     if (buffer[0] == L'\0') {
         return fallback;
     }
 
     wchar_t* end = nullptr;
-    const long value = std::wcstol(buffer, &end, 10);
+    const long value = std::wcstol(buffer.c_str(), &end, 10);
     if (end == buffer) {
         return fallback;
     }
@@ -261,43 +227,30 @@ int ReadInt(const wchar_t* section, const wchar_t* key, int fallback,
 
 float ReadFloat(const wchar_t* section, const wchar_t* key, float fallback,
                 const std::filesystem::path& file) {
-    wchar_t buffer[64]{};
-    GetPrivateProfileStringW(section, key, L"", buffer,
-                             static_cast<DWORD>(std::size(buffer)), file.c_str());
+    const std::wstring buffer = ReadProfileString(section, key, L"", file);
     if (buffer[0] == L'\0') {
         return fallback;
     }
 
     wchar_t* end = nullptr;
-    const float value = std::wcstof(buffer, &end);
+    const float value = std::wcstof(buffer.c_str(), &end);
     return (end == buffer) ? fallback : value;
 }
 
 std::wstring ReadString(const wchar_t* section, const wchar_t* key,
                         const wchar_t* fallback,
                         const std::filesystem::path& file) {
-    wchar_t buffer[64]{};
-    GetPrivateProfileStringW(section, key, fallback, buffer,
-                             static_cast<DWORD>(std::size(buffer)), file.c_str());
-
-    std::wstring value(buffer);
-    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t character) {
-        return static_cast<wchar_t>(std::towlower(character));
-    });
+    std::wstring value = ReadProfileString(section, key, fallback, file);
+    value = text::LowerAscii(value);
     return value;
 }
 
 bool ReadBool(const wchar_t* section, const wchar_t* key, bool fallback,
               const std::filesystem::path& file) {
     const wchar_t* defaultValue = fallback ? L"1" : L"0";
-    wchar_t buffer[16]{};
-    GetPrivateProfileStringW(section, key, defaultValue, buffer,
-                             static_cast<DWORD>(std::size(buffer)), file.c_str());
+    const std::wstring buffer = ReadProfileString(section, key, defaultValue, file);
 
-    std::wstring value(buffer);
-    std::transform(value.begin(), value.end(), value.begin(), [](wchar_t character) {
-        return static_cast<wchar_t>(std::towlower(character));
-    });
+    std::wstring value = text::LowerAscii(buffer);
 
     return value == L"1" || value == L"true" || value == L"yes" || value == L"on";
 }
@@ -323,25 +276,6 @@ BrightnessTargets ReadTargets(const std::filesystem::path& file) {
         return BrightnessTargets::Internal;
     }
     return BrightnessTargets::All;
-}
-
-std::filesystem::path ExecutableDirectory() {
-    std::wstring buffer(MAX_PATH, L'\0');
-
-    for (;;) {
-        const DWORD length =
-            GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
-        if (length == 0) {
-            return {};
-        }
-        if (length < buffer.size()) {
-            buffer.resize(length);
-            break;
-        }
-        buffer.resize(buffer.size() * 2);
-    }
-
-    return std::filesystem::path(buffer).parent_path();
 }
 
 void CreateDefaultConfigIfMissing(const std::filesystem::path& path) {
@@ -421,30 +355,6 @@ AppConfig ParseConfig(const std::filesystem::path& path) {
 
 } // namespace
 
-std::filesystem::path GetDataDirectory() {
-    const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
-    if (required > 0) {
-        std::wstring value(required, L'\0');
-        const DWORD written =
-            GetEnvironmentVariableW(L"LOCALAPPDATA", value.data(), required);
-        if (written > 0 && written < required) {
-            value.resize(written);
-            return std::filesystem::path(value) / L"SmartTrackpad";
-        }
-    }
-
-    // Portable fallback: keep user data next to the executable.
-    const std::filesystem::path directory = ExecutableDirectory();
-    if (!directory.empty()) {
-        return directory / L"SmartTrackpad";
-    }
-    return std::filesystem::path(L"SmartTrackpad");
-}
-
-std::filesystem::path GetConfigPath() {
-    return GetDataDirectory() / L"SmartTrackpad.ini";
-}
-
 AppConfig LoadConfig(const std::filesystem::path& path) {
     CreateDefaultConfigIfMissing(path);
 
@@ -481,169 +391,6 @@ bool SaveConfig(const std::filesystem::path& path, const AppConfig& config) {
                   path.c_str());
     }
     return written;
-}
-
-// ---------------------------------------------------------------------------
-// ConfigWatcher
-// ---------------------------------------------------------------------------
-
-namespace {
-
-constexpr DWORD kDebounceMs = 300;
-
-bool NotifyMatches(const std::vector<BYTE>& buffer, DWORD bytes,
-                   const std::wstring& fileName) {
-    DWORD offset = 0;
-    for (;;) {
-        if (offset + sizeof(FILE_NOTIFY_INFORMATION) > bytes) {
-            return false;
-        }
-
-        const auto* info = reinterpret_cast<const FILE_NOTIFY_INFORMATION*>(
-            buffer.data() + offset);
-        const std::wstring name(info->FileName, info->FileNameLength / sizeof(wchar_t));
-        if (_wcsicmp(name.c_str(), fileName.c_str()) == 0) {
-            return true;
-        }
-
-        if (info->NextEntryOffset == 0) {
-            return false;
-        }
-        offset += info->NextEntryOffset;
-    }
-}
-
-} // namespace
-
-ConfigWatcher::ConfigWatcher() = default;
-
-ConfigWatcher::~ConfigWatcher() {
-    Stop();
-}
-
-bool ConfigWatcher::Watch(const std::filesystem::path& configPath,
-                          std::function<void()> onChanged) {
-    Stop();
-
-    const std::filesystem::path directory = configPath.parent_path();
-    if (directory.empty()) {
-        return false;
-    }
-
-    const HANDLE directoryHandle =
-        CreateFileW(directory.c_str(), FILE_LIST_DIRECTORY,
-                    FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
-                    OPEN_EXISTING,
-                    FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, nullptr);
-    if (directoryHandle == INVALID_HANDLE_VALUE) {
-        return false;
-    }
-
-    const HANDLE stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (stopEvent == nullptr) {
-        CloseHandle(directoryHandle);
-        return false;
-    }
-
-    directory_ = directoryHandle;
-    stopEvent_ = stopEvent;
-    fileName_ = configPath.filename().wstring();
-    onChanged_ = std::move(onChanged);
-
-    thread_ = std::jthread([this](std::stop_token token) { Run(std::move(token)); });
-    return true;
-}
-
-void ConfigWatcher::Stop() {
-    if (thread_.joinable()) {
-        thread_.request_stop();
-        if (stopEvent_ != nullptr) {
-            SetEvent(static_cast<HANDLE>(stopEvent_));
-        }
-        thread_.join();
-    }
-
-    if (stopEvent_ != nullptr) {
-        CloseHandle(static_cast<HANDLE>(stopEvent_));
-        stopEvent_ = nullptr;
-    }
-    if (directory_ != nullptr) {
-        CloseHandle(static_cast<HANDLE>(directory_));
-        directory_ = nullptr;
-    }
-    onChanged_ = nullptr;
-}
-
-void ConfigWatcher::Run(std::stop_token token) {
-    const HANDLE directory = static_cast<HANDLE>(directory_);
-    const HANDLE stopEvent = static_cast<HANDLE>(stopEvent_);
-
-    // Wakes the blocking ReadDirectoryChangesW when the thread is stopped.
-    std::stop_callback wake(token, [stopEvent] { SetEvent(stopEvent); });
-
-    const HANDLE changeEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
-    if (changeEvent == nullptr) {
-        return;
-    }
-
-    std::vector<BYTE> buffer(8 * 1024);
-    OVERLAPPED overlapped{};
-    overlapped.hEvent = changeEvent;
-
-    const HANDLE handles[2] = {stopEvent, changeEvent};
-
-    auto arm = [&]() -> bool {
-        ResetEvent(changeEvent);
-        if (ReadDirectoryChangesW(
-                directory, buffer.data(), static_cast<DWORD>(buffer.size()), FALSE,
-                FILE_NOTIFY_CHANGE_LAST_WRITE | FILE_NOTIFY_CHANGE_SIZE |
-                    FILE_NOTIFY_CHANGE_FILE_NAME,
-                nullptr, &overlapped, nullptr)) {
-            return true;
-        }
-        return GetLastError() == ERROR_IO_PENDING;
-    };
-
-    auto consume = [&](bool& matched) -> bool {
-        DWORD transferred = 0;
-        if (!GetOverlappedResult(directory, &overlapped, &transferred, FALSE)) {
-            return GetLastError() == ERROR_OPERATION_ABORTED;
-        }
-        // A notification overflow means changes were dropped; treat it as a
-        // change rather than ignoring the save.
-        if (transferred == 0 || NotifyMatches(buffer, transferred, fileName_)) {
-            matched = true;
-        }
-        return true;
-    };
-
-    // One reload per burst: a notification only fires the callback after a
-    // quiet period, and the pending read is always re-armed so no event is
-    // missed while waiting.
-    bool matched = false;
-    bool running = arm();
-    while (running && !token.stop_requested()) {
-        const DWORD wait = WaitForMultipleObjects(2, handles, FALSE, kDebounceMs);
-        if (wait == WAIT_TIMEOUT) {
-            if (matched) {
-                matched = false;
-                if (onChanged_) {
-                    onChanged_();
-                }
-            }
-            continue;
-        }
-        if (wait != WAIT_OBJECT_0 + 1) {
-            break;
-        }
-        if (!consume(matched)) {
-            break;
-        }
-        running = arm();
-    }
-
-    CancelIoEx(directory, &overlapped);
-    CloseHandle(changeEvent);
 }
 
 } // namespace st
