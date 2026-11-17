@@ -27,10 +27,16 @@ namespace {
 void PostMediaKey(int key) {
     for (const bool down : {true, false}) {
         const int flags = down ? 0xA : 0xB;
-        NSEvent* event = [NSEvent otherEventWithType:NSEventTypeSystemDefined
-                                           subtype:8
-                                             data1:(key << 16) | (flags << 8)
-                                             data2:-1];
+        NSEvent* event =
+            [NSEvent otherEventWithType:NSEventTypeSystemDefined
+                               location:NSZeroPoint
+                          modifierFlags:0
+                              timestamp:0
+                           windowNumber:0
+                                context:nil
+                                subtype:8
+                                  data1:(key << 16) | (flags << 8)
+                                  data2:-1];
         CGEventRef cgEvent = [event CGEvent];
         if (cgEvent != nullptr) {
             CGEventPost(kCGHIDEventTap, cgEvent);
@@ -79,6 +85,10 @@ struct MacApp::Impl {
 // Menu bar shell
 // ---------------------------------------------------------------------------
 
+@class SmartTrackpadDelegate;
+
+// NSApplication.delegate is a weak reference, so the delegate is kept alive
+// here for the lifetime of the process.
 static SmartTrackpadDelegate* g_delegate = nil;
 
 @interface SmartTrackpadDelegate : NSObject <NSApplicationDelegate>

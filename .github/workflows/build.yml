@@ -64,7 +64,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: SmartTrackpad-linux-${{ github.sha }}
-          path: build/smarttrackpad
+          path: build/SmartTrackpad
           if-no-files-found: error
 
   macos:

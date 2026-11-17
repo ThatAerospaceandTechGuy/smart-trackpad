@@ -88,7 +88,9 @@ void TestSamePathIdentity() {
     std::error_code error;
     const std::filesystem::path relative =
         std::filesystem::relative(file, std::filesystem::current_path(), error);
-    if (!error) {
+    // relative() cannot express a path across drives, which is what happens on
+    // CI where the temp directory and the workspace live on different volumes.
+    if (!error && !relative.empty() && std::filesystem::exists(relative, error)) {
         CHECK(st::SamePath(file, relative));
     }
 

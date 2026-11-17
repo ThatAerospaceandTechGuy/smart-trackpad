@@ -5,14 +5,11 @@
 #include <algorithm>
 #include <cmath>
 
-namespace st {
 namespace {
-
 constexpr CGFloat kWidth = 240.0;
 constexpr CGFloat kHeight = 56.0;
 constexpr CGFloat kMarginFromBottom = 96.0;
 constexpr NSTimeInterval kVisibleSeconds = 2.0;
-
 } // namespace
 
 // The HUD draws itself: a rounded dark card, a level bar and the value.  Kept in
@@ -69,6 +66,8 @@ constexpr NSTimeInterval kVisibleSeconds = 2.0;
 }
 
 @end
+
+namespace st {
 
 OverlayMac::OverlayMac() {
     NSWindow* panel = [[NSWindow alloc]
