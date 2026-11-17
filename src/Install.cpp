@@ -61,6 +61,83 @@ std::filesystem::path StartupShortcutPath() {
     return path;
 }
 
+// Reads the target of an existing .lnk.  Used to spot Startup entries that
+// launch a different (usually older) SmartTrackpad.exe, which would otherwise
+// start a second, unrelated build at sign-in.
+std::filesystem::path ReadShortcutTarget(const std::filesystem::path& shortcut) {
+    const HRESULT comResult =
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    const bool shouldUninitialize = SUCCEEDED(comResult);
+    if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
+        return {};
+    }
+
+    std::filesystem::path target;
+    {
+        ComPtr<IShellLinkW> link;
+        if (SUCCEEDED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER,
+                                       IID_IShellLinkW,
+                                       reinterpret_cast<void**>(link.Put())))) {
+            ComPtr<IPersistFile> file;
+            if (SUCCEEDED(link->QueryInterface(
+                    IID_IPersistFile, reinterpret_cast<void**>(file.Put()))) &&
+                SUCCEEDED(file->Load(shortcut.c_str(), STGM_READ))) {
+                wchar_t buffer[MAX_PATH * 2]{};
+                if (SUCCEEDED(link->GetPath(buffer, static_cast<int>(std::size(buffer)),
+                                            nullptr, SLGP_RAWPATH))) {
+                    target = buffer;
+                }
+            }
+        }
+    }
+
+    if (shouldUninitialize) {
+        CoUninitialize();
+    }
+    return target;
+}
+
+// Removes Startup entries that launch a SmartTrackpad.exe other than the managed
+// copy.  Returns the number of entries removed.
+int RemoveConflictingStartupShortcuts(const std::filesystem::path& keep) {
+    const std::filesystem::path folder = StartupShortcutPath().parent_path();
+    if (folder.empty()) {
+        return 0;
+    }
+
+    int removed = 0;
+    std::error_code error;
+    for (std::filesystem::directory_iterator it(folder, error), end; !error && it != end;
+         it.increment(error)) {
+        const std::filesystem::path candidate = it->path();
+        if (candidate.extension() != L".lnk") {
+            continue;
+        }
+        if (_wcsicmp(candidate.filename().c_str(), kStartupShortcutName) == 0) {
+            continue;
+        }
+
+        const std::filesystem::path target = ReadShortcutTarget(candidate);
+        if (target.empty() || _wcsicmp(target.filename().c_str(),
+                                       L"SmartTrackpad.exe") != 0) {
+            continue;
+        }
+        if (SamePath(target, keep)) {
+            continue;
+        }
+
+        std::error_code removeError;
+        if (std::filesystem::remove(candidate, removeError)) {
+            ++removed;
+            LogFormat(LogLevel::Warning,
+                      L"Install: removed the stale Startup shortcut \"%ls\" "
+                      L"(it launched \"%ls\").",
+                      candidate.filename().c_str(), target.c_str());
+        }
+    }
+    return removed;
+}
+
 bool CreateStartupShortcut(const std::filesystem::path& target) {
     const std::filesystem::path shortcutPath = StartupShortcutPath();
     if (shortcutPath.empty()) {
@@ -120,6 +197,7 @@ bool CreateStartupShortcut(const std::filesystem::path& target) {
 
     LogFormat(LogLevel::Info, L"Install: Startup shortcut points to \"%ls\".",
               target.c_str());
+    RemoveConflictingStartupShortcuts(target);
     return true;
 }
 

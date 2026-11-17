@@ -37,8 +37,9 @@ RestartApplications=no
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+; The application owns its Startup shortcut (it follows [general] start_with_windows
+; in the INI file), so the installer must not create a second one.
 [Tasks]
-Name: "startup"; Description: "Start {#AppName} when I sign in"; GroupDescription: "Startup:"
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
 
 [Files]
@@ -49,7 +50,6 @@ Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{group}\{#AppName} settings"; Filename: "{app}\{#AppExe}"; Parameters: "--settings"
 Name: "{group}\{#AppName} zone test"; Filename: "{app}\{#AppExe}"; Parameters: "--zone-test"
 Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: startup
 Name: "{userdesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
