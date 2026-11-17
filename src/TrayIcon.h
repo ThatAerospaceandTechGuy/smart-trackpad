@@ -9,6 +9,7 @@ namespace st {
 
 struct TrayCallbacks {
     std::function<void()> onToggleEnabled;
+    std::function<void()> onToggleBrightness;
     std::function<void()> onOpenSettings;
     std::function<void()> onOpenZoneTest;
     std::function<void()> onReloadConfig;
@@ -35,6 +36,7 @@ public:
     bool Create(HINSTANCE instance, const std::wstring& title, TrayCallbacks callbacks);
     void SetEnabled(bool enabled);
     void SetStartWithWindows(bool enabled);
+    void SetBrightnessEnabled(bool enabled);
     void Remove();
 
 private:
@@ -52,6 +54,7 @@ private:
     static constexpr UINT kAboutCommand = 1010;
     static constexpr UINT kUninstallCommand = 1011;
     static constexpr UINT kExitCommand = 1012;
+    static constexpr UINT kBrightnessCommand = 1013;
 
     static LRESULT CALLBACK WndProcStatic(HWND hwnd, UINT message, WPARAM wParam,
                                           LPARAM lParam);
@@ -69,6 +72,7 @@ private:
     bool added_ = false;
     bool enabled_ = true;
     bool startWithWindows_ = true;
+    bool brightnessEnabled_ = false;
     std::wstring title_ = L"Smart Trackpad";
     std::wstring tooltip_;
     TrayCallbacks callbacks_;

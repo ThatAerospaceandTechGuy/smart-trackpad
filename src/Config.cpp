@@ -35,7 +35,7 @@ struct ConfigText {
     float activation = 2.0f;
     float step = 10.0f;
     bool enableLeft = true;
-    bool enableRight = true;
+    bool enableRight = false;
     bool enableTop = true;
     bool invertVolume = false;
     bool invertBrightness = false;
@@ -387,7 +387,9 @@ AppConfig ParseConfig(const std::filesystem::path& path) {
                                      0, 2000);
 
     gestures.leftEnabled = ReadBool(L"zones", L"enable_left", true, path);
-    gestures.rightEnabled = ReadBool(L"zones", L"enable_right", true, path);
+    // Off by default: an absolute brightness mapping is surprising when a
+    // fingertip touches the bottom of the right edge and the panel goes dark.
+    gestures.rightEnabled = ReadBool(L"zones", L"enable_right", false, path);
     gestures.topEnabled = ReadBool(L"zones", L"enable_top", true, path);
 
     gestures.invertVolume = ReadBool(L"gestures", L"invert_volume", false, path);

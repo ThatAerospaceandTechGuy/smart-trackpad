@@ -7,8 +7,7 @@ Windows touchpad into hardware controls:
 | --- | --- | --- |
 | Left edge (0-10% width) | Touch/slide | Absolute volume: bottom = 0%, top = 100% |
 | Left edge | Tap | Toggle mute |
-| Right edge (90-100% width) | Touch/slide | Absolute brightness: bottom = 0%, top = 100% |
-| Right edge | Tap | Turn the display off (optional) |
+| Right edge (90-100% width) | Touch/slide | Absolute brightness: bottom = 0%, top = 100% (off by default, see below) |
 | Top edge (0-10% height) | Slide right / left | Next / previous track (one per 10% travel) |
 | Top edge | Tap | Play / pause |
 
@@ -38,6 +37,12 @@ gesture latches to its zone once activated, so the finger may drift away from
 the edge while the control keeps working. Corners are disambiguated by the
 dominant axis of the first movement: vertical in the top-left corner controls
 volume, horizontal controls media, and a tap resolves to the vertical edge.
+
+The brightness band is **off by default** (`[zones] enable_right=0`): touching
+the bottom of the right edge used to take the panel to its darkest value, which
+looks like the screen switching off. Turn it on in the tray menu (*Brightness
+gestures*) or in the settings dialog when you want it; a short touch in that
+band never switches the display off.
 
 The left and right edges are **absolute sliders**. After the activation
 threshold is crossed, the contact's height maps directly to 0-100% volume or
@@ -127,6 +132,9 @@ The tray icon offers:
 * **Exit**.
 
 Only one instance can run at a time (a local named mutex enforces this).
+If the Startup folder contains another shortcut that launches a different
+`SmartTrackpad.exe` - an old copy in `Downloads`, for example - it is logged and
+removed, so signing in always starts the managed copy once.
 
 ## Configuration
 
@@ -148,7 +156,7 @@ left_width=10          ; percent of touchpad width (1-45)
 right_width=10
 top_height=10          ; percent of touchpad height (1-45)
 enable_left=1
-enable_right=1
+enable_right=0          ; brightness band is off by default
 enable_top=1
 
 [gestures]
@@ -247,7 +255,7 @@ WM_INPUT  ->  RawInputSource  ->  ContactTracker  ->  GestureEngine  ->  ActionD
   directory, posts a single reload per save (300 ms quiet period) and is
   stopped with a stop-token callback that wakes the pending read.
 * **`ActionDispatcher`** injects media keys with `SendInput`, toggles mute,
-  powers the display off for a tap, and forwards absolute volume/brightness
+  and forwards absolute volume/brightness
   values to their controllers and the overlay. Slow audio/display operations
   never run on the message loop. Controller workers report the confirmed level
   back with `Osd::Post`, which marshals into the UI thread by `PostMessage`.
@@ -303,8 +311,7 @@ network access and no third-party dependencies.
   controlled through DDC/CI, and internal laptop panels through the WMI
   `WmiMonitorBrightnessMethods` provider; both are written for every change
   unless `[display]` narrows it. If neither backend accepts the value the log
-  contains a warning and the right edge has no visible effect. The right-edge
-  tap turns the display off (via `SC_MONITORPOWER`); any key or touch wakes it.
+  contains a warning and the right edge has no visible effect.
 * **No automatic driver installation.** The utility installs only its own
   per-user executable and Startup shortcut. It cannot safely install the
   correct signed touchpad driver for every laptop, and it deliberately does

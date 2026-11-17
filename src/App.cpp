@@ -157,10 +157,6 @@ bool App::Initialize(HINSTANCE instance) {
                 ++tapCount_;
                 lastAction_ = L"mute toggle";
                 break;
-            case EdgeAction::MonitorOff:
-                ++tapCount_;
-                lastAction_ = L"display off";
-                break;
             }
             actions_->Handle(action);
             UpdateDiagnostics();
@@ -310,6 +306,7 @@ void App::CreateTrayIcon() {
 
     TrayCallbacks callbacks;
     callbacks.onToggleEnabled = [this] { OnToggleEnabled(); };
+    callbacks.onToggleBrightness = [this] { OnToggleBrightness(); };
     callbacks.onOpenSettings = [this] { OnOpenSettings(); };
     callbacks.onOpenZoneTest = [this] { OnOpenZoneTest(); };
     callbacks.onReloadConfig = [this] {
@@ -347,6 +344,7 @@ void App::CreateTrayIcon() {
     }
 
     tray_->SetEnabled(enabled_);
+    tray_->SetBrightnessEnabled(config_.gestures.rightEnabled);
     tray_->SetStartWithWindows(IsStartWithWindowsEnabled());
 }
 
@@ -367,9 +365,24 @@ void App::OnToggleEnabled() {
     }
     if (tray_) {
         tray_->SetEnabled(enabled_);
+    tray_->SetBrightnessEnabled(config_.gestures.rightEnabled);
     }
     LogFormat(LogLevel::Info, L"Edge gestures %ls.",
               enabled_ ? L"enabled" : L"disabled");
+}
+
+void App::OnToggleBrightness() {
+    config_.gestures.rightEnabled = !config_.gestures.rightEnabled;
+    if (gestures_) {
+        gestures_->SetSettings(config_.gestures);
+        gestures_->Reset();
+    }
+    SaveConfig(config_.configPath, config_);
+    if (tray_) {
+        tray_->SetBrightnessEnabled(config_.gestures.rightEnabled);
+    }
+    LogFormat(LogLevel::Info, L"Brightness gestures %ls.",
+              config_.gestures.rightEnabled ? L"enabled" : L"disabled");
 }
 
 void App::OnToggleStartWithWindows() {

@@ -28,6 +28,7 @@ BEGIN
     IDS_MENU_ABOUT               "About Smart Trackpad"
     IDS_MENU_UNINSTALL           "Uninstall..."
     IDS_MENU_EXIT                "Exit"
+    IDS_MENU_BRIGHTNESS_GESTURES "Brightness gestures"
     IDS_ABOUT_FORMAT             "Smart Trackpad %s\n\nConfiguration:\n%s\n\nLog file:\n%s"
     IDS_UNINSTALL_CONFIRM        "Remove the Startup shortcut and the installed copy of Smart Trackpad?\n\nYour configuration and log files are kept in:\n%s"
     IDS_UNINSTALL_FAILED         "Smart Trackpad could not remove every file. See the log for details."

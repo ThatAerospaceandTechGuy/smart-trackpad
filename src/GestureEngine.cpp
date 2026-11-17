@@ -257,7 +257,8 @@ void GestureEngine::EmitTap(EdgeZone zone) {
         onAction_(EdgeAction::ToggleMute);
         break;
     case EdgeZone::Right:
-        onAction_(EdgeAction::MonitorOff);
+        // Deliberately nothing: a short touch on the right edge must not switch
+        // the display off.
         break;
     case EdgeZone::Top:
         onAction_(EdgeAction::MediaPlayPause);

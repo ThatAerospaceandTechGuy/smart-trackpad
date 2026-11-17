@@ -77,6 +77,10 @@ void TrayIcon::SetEnabled(bool enabled) {
     }
 }
 
+void TrayIcon::SetBrightnessEnabled(bool enabled) {
+    brightnessEnabled_ = enabled;
+}
+
 void TrayIcon::SetStartWithWindows(bool enabled) {
     startWithWindows_ = enabled;
 }
@@ -161,6 +165,8 @@ void TrayIcon::ShowMenu() {
 
     item(MF_STRING | (enabled_ ? MF_CHECKED : MF_UNCHECKED), kToggleCommand,
          IDS_MENU_EDGE_GESTURES);
+    item(MF_STRING | (brightnessEnabled_ ? MF_CHECKED : MF_UNCHECKED),
+         kBrightnessCommand, IDS_MENU_BRIGHTNESS_GESTURES);
     item(MF_STRING, kSettingsCommand, IDS_MENU_SETTINGS);
     item(MF_STRING, kZoneTestCommand, IDS_MENU_ZONE_TEST);
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
@@ -194,6 +200,9 @@ void TrayIcon::ShowMenu() {
     switch (command) {
     case kToggleCommand:
         invoke(callbacks_.onToggleEnabled);
+        break;
+    case kBrightnessCommand:
+        invoke(callbacks_.onToggleBrightness);
         break;
     case kSettingsCommand:
         invoke(callbacks_.onOpenSettings);

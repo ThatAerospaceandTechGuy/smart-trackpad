@@ -28,8 +28,15 @@ struct Rig {
     std::uint64_t now = 1000;
     GestureEngine engine;
 
-    explicit Rig(GestureSettings value = {})
-        : settings(value),
+    // Brightness (right edge) is off in the shipped defaults; most tests want it
+    // on, and the ones about the default pass `brightness = false`.
+    static GestureSettings Prepare(GestureSettings value, bool brightness) {
+        value.rightEnabled = brightness;
+        return value;
+    }
+
+    explicit Rig(GestureSettings value = {}, bool withBrightness = true)
+        : settings(Prepare(value, withBrightness)),
           engine(settings,
                  [this](int percent) { volume.push_back(percent); },
                  [this](EdgeAction action) { actions.push_back(action); },
@@ -313,7 +320,7 @@ void TestDisablingZones() {
     {
         GestureSettings settings;
         settings.rightEnabled = false;
-        Rig rig(settings);
+        Rig rig(settings, false);
 
         rig.Down(0.95f, 0.50f);
         rig.Move(0.95f, 0.55f);
@@ -359,7 +366,18 @@ void TestNewGestureAfterLift() {
     rig.Move(0.95f, 0.55f);
     CHECK(rig.engine.ActiveZone() == EdgeZone::Right);
     CheckBrightness(rig, {55});
-    CheckVolume(rig, {55});
+}
+
+void TestBrightnessZoneIsOffByDefault() {
+    Rig rig(GestureSettings{}, false);
+
+    // Dragging the whole right edge must leave the display alone.
+    rig.Down(0.95f, 0.10f);
+    rig.Move(0.95f, 0.60f);
+    rig.Up();
+    CHECK(rig.brightness.empty());
+    CHECK(rig.actions.empty());
+    CHECK(rig.engine.ActiveZone() == EdgeZone::None);
 }
 
 void TestBrightnessFloorClamp() {
@@ -403,13 +421,15 @@ void TestTapOnLeftEdgeMutes() {
     CHECK(rig.brightness.empty());
 }
 
-void TestTapOnRightEdgeTurnsDisplayOff() {
+void TestTapOnRightEdgeDoesNothing() {
     Rig rig;
     rig.Down(0.95f, 0.60f);
     rig.Advance(120);
     rig.Up();
-    CheckActions(rig, {EdgeAction::MonitorOff});
+    // A short touch in the brightness band must not switch the display off.
+    CheckActions(rig, {});
     CHECK(rig.volume.empty());
+    CHECK(rig.brightness.empty());
 }
 
 void TestTapOnTopEdgeTogglesPlayback() {
@@ -522,10 +542,11 @@ int main() {
     RUN_TEST(TestDisablingZones);
     RUN_TEST(TestInversion);
     RUN_TEST(TestNewGestureAfterLift);
+    RUN_TEST(TestBrightnessZoneIsOffByDefault);
     RUN_TEST(TestBrightnessFloorClamp);
     RUN_TEST(TestVolumeRangeClamp);
     RUN_TEST(TestTapOnLeftEdgeMutes);
-    RUN_TEST(TestTapOnRightEdgeTurnsDisplayOff);
+    RUN_TEST(TestTapOnRightEdgeDoesNothing);
     RUN_TEST(TestTapOnTopEdgeTogglesPlayback);
     RUN_TEST(TestTapInCornerPrefersVerticalEdge);
     RUN_TEST(TestTapRejectedWhenHeldTooLong);

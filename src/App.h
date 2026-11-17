@@ -48,6 +48,7 @@ private:
     void CreateTrayIcon();
 
     void OnToggleEnabled();
+    void OnToggleBrightness();
     void OnToggleStartWithWindows();
     void OnOpenSettings();
     void OnOpenZoneTest();

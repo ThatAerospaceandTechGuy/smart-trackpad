@@ -10,7 +10,6 @@ enum class EdgeAction {
     MediaPrevious,
     MediaPlayPause,
     ToggleMute,
-    MonitorOff,
 };
 
 enum class EdgeZone {
@@ -44,7 +43,7 @@ struct GestureSettings {
     bool tapsEnabled = true;
 
     bool leftEnabled = true;
-    bool rightEnabled = true;
+    bool rightEnabled = false;
     bool topEnabled = true;
 
     bool invertVolume = false;

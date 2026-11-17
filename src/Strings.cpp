@@ -32,6 +32,7 @@ constexpr Fallback kFallbacks[] = {
     {IDS_MENU_ABOUT, L"About Smart Trackpad"},
     {IDS_MENU_UNINSTALL, L"Uninstall..."},
     {IDS_MENU_EXIT, L"Exit"},
+    {IDS_MENU_BRIGHTNESS_GESTURES, L"Brightness gestures"},
     {IDS_ABOUT_FORMAT,
      L"Smart Trackpad %s\r\n\r\nConfiguration:\r\n%s\r\n\r\nLog file:\r\n%s"},
     {IDS_UNINSTALL_CONFIRM,

@@ -88,7 +88,9 @@ void TestDefaultsAreCreated() {
     CHECK(NearlyEqual(config.gestures.activationDistance, 0.02f));
     CHECK(NearlyEqual(config.gestures.stepDistance, 0.10f));
     CHECK(config.gestures.leftEnabled);
-    CHECK(config.gestures.rightEnabled);
+    // Brightness is off by default so a stray touch on the right edge cannot
+    // change it.
+    CHECK(!config.gestures.rightEnabled);
     CHECK(config.gestures.topEnabled);
     CHECK(!config.gestures.invertVolume);
     CHECK(!config.gestures.invertBrightness);
@@ -314,6 +316,19 @@ max_volume=10
     CHECK(config.gestures.maxVolumePercent == 90);
 }
 
+void TestRightEdgeCanBeEnabled() {
+    TempDirectory temp;
+    const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file << "[zones]\nright_width=12\nenable_right=1\n";
+    }
+
+    const st::AppConfig config = st::LoadConfig(path);
+    CHECK(config.gestures.rightEnabled);
+    CHECK(NearlyEqual(config.gestures.rightBand, 0.12f));
+}
+
 void TestSaveConfigRoundTrip() {
     TempDirectory temp;
     const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
@@ -375,6 +390,7 @@ int main() {
     RUN_TEST(TestMalformedValuesFallBackToDefaults);
     RUN_TEST(TestNewSectionsAreParsed);
     RUN_TEST(TestInvertedSafetyRangeIsSwapped);
+    RUN_TEST(TestRightEdgeCanBeEnabled);
     RUN_TEST(TestSaveConfigRoundTrip);
 
     if (g_failures != 0) {

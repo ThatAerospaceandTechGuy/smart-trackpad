@@ -8,12 +8,18 @@ All notable changes to Smart Trackpad are documented here.  The project follows
 ### Added
 
 - **Taps.** A short touch that never slides acts on the zone it started in:
-  left edge toggles mute, top edge toggles playback, right edge turns the
-  display off.  A contact that crosses the activation distance is still a
-  slider, and holding longer than 350 ms is not a tap.
+  left edge toggles mute, top edge toggles playback.  A contact that crosses the
+  activation distance is still a slider, and holding longer than 350 ms is not a
+  tap.  There is no display-off gesture: it was triggered by accident far more
+  often than on purpose.
 - **Safety limits.** `[safety]` clamps the volume and brightness output range.
-  The brightness floor defaults to 5% so the right edge can no longer black out
-  a panel.
+  The brightness floor defaults to 5% so the band can no longer black out a
+  panel.
+- **Brightness gestures are off by default.** Dragging the right edge maps the
+  contact height to 0-100% brightness, and the bottom of the pad therefore means
+  "as dark as the panel goes", which reads as the screen turning off.  The band
+  is disabled in the shipped configuration and can be switched on from the tray
+  menu or the settings dialog.
 - **Cooldown.** After a cancelled gesture (second finger, device removal) the
   pad must settle for 150 ms, so a resting palm cannot re-trigger the edge.
 - **Input device filter.** `[input] devices=touchpad|touchscreen|both`, default
@@ -38,6 +44,9 @@ All notable changes to Smart Trackpad are documented here.  The project follows
 - Stale `SmartTrackpad.exe.old` / `.new` copies from an in-use removal or an
   interrupted update are deleted on the next start, so uninstalling never needs
   administrator rights.
+- Startup entries that launch a *different* `SmartTrackpad.exe` (an older copy
+  in Downloads, for example) are detected and removed, so signing in cannot
+  start a second, unrelated build.
 - **Accessibility**: high-contrast colours, no fading when Windows animations
   are disabled, and `[osd] show_percentage=0` for a bar-only overlay.
 - Localization: user-visible strings live in the `STRINGTABLE` in
@@ -60,8 +69,7 @@ All notable changes to Smart Trackpad are documented here.  The project follows
 ### Fixed
 
 - The touchscreen collection no longer changes volume/brightness.
-- Taps on the right edge cannot leave the display dark with no way back
-  (the brightness floor applies to taps as well).
+- Taps never change the display power state.
 - The overlay no longer ignores the monitor the user is working on.
 
 ### Testing
