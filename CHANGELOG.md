@@ -17,6 +17,9 @@ All notable changes to Smart Trackpad are documented here.  The project follows
 - CI matrix for Windows, Linux and macOS; `tools/build-linux.sh` and
   `tools/run-tests.sh` build and test with only a compiler.
 - Portable crash handler for macOS/Linux (backtrace to the log and stderr).
+- `evdev_decode` test binary: the Linux multitouch slot decoding (absolute
+  ranges, y flip, multi-finger reports, slot reuse) is a tested unit instead of
+  code that only runs on hardware.
 
 ### Changed
 

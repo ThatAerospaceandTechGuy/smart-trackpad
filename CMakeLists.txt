@@ -76,6 +76,7 @@ else()
         src/linux/AudioLinux.cpp
         src/linux/BrightnessLinux.cpp
         src/linux/ConfigWatcherLinux.cpp
+        src/linux/EvdevDecode.cpp
         src/linux/InputEvdev.cpp
         src/linux/OsdLinux.cpp
         src/linux/ZoneTestLinux.cpp
@@ -222,6 +223,15 @@ if(SMARTTRACKPAD_BUILD_TESTS)
         tests/PathCompareTests.cpp
         src/common/PathCompare.cpp
     )
+
+    # evdev report decoding (Linux input, tested on every platform).
+    smarttrackpad_add_test(evdev_decode
+        tests/EvdevDecodeTests.cpp
+        src/linux/EvdevDecode.cpp
+        src/common/HidDecode.cpp
+    )
+    # The decoder is platform independent but lives with the Linux backend.
+    target_include_directories(evdev_decode PRIVATE src/linux)
 
     # Digitizer report lifecycle (one contact, multi-finger cancel, removal).
     smarttrackpad_add_test(contact_tracker

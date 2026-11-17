@@ -1,5 +1,6 @@
 #include "InputEvdev.h"
 
+#include "EvdevDecode.h"
 #include "HidDecode.h"
 #include "Log.h"
 #include "Text.h"
@@ -16,10 +17,17 @@
 #include <cmath>
 #include <vector>
 
+// The duplicated constants in EvdevDecode.h must match the kernel headers.
+static_assert(st::evdev::kAbsX == ABS_X);
+static_assert(st::evdev::kAbsY == ABS_Y);
+static_assert(st::evdev::kAbsMtSlot == ABS_MT_SLOT);
+static_assert(st::evdev::kAbsMtPositionX == ABS_MT_POSITION_X);
+static_assert(st::evdev::kAbsMtPositionY == ABS_MT_POSITION_Y);
+static_assert(st::evdev::kAbsMtTrackingId == ABS_MT_TRACKING_ID);
+static_assert(st::evdev::kEventTypeAbs == EV_ABS);
+
 namespace st {
 namespace {
-
-constexpr int kMaxSlots = 10;
 
 // An evdev axis as reported by EVIOCGABS.
 struct AxisRange {
@@ -73,19 +81,8 @@ struct EvdevInput::Device {
     std::string name;
     bool isDirect = false; // INPUT_PROP_DIRECT: a touchscreen, not a touchpad
     bool hasMultitouch = false;
-    int slot = 0;
-    int currentX = 0;
-    int currentY = 0;
     bool tipDown = false;
-    AxisRange x;
-    AxisRange y;
-
-    struct Slot {
-        bool active = false;
-        int x = 0;
-        int y = 0;
-    };
-    Slot slots[kMaxSlots];
+    evdev::Decoder decoder{evdev::AxisRange{}, evdev::AxisRange{}};
 };
 
 EvdevInput::EvdevInput(Callbacks callbacks)
@@ -126,11 +123,10 @@ bool EvdevInput::OpenDevice(const std::string& path, DigitizerDevices devices) {
     device->name = DeviceName(fd);
     device->isDirect = isDirect;
     device->hasMultitouch = hasMulti;
-    device->x = ReadAxis(fd, hasMulti ? ABS_MT_POSITION_X : ABS_X);
-    device->y = ReadAxis(fd, hasMulti ? ABS_MT_POSITION_Y : ABS_Y);
+    const AxisRange x = ReadAxis(fd, hasMulti ? ABS_MT_POSITION_X : ABS_X);
+    const AxisRange y = ReadAxis(fd, hasMulti ? ABS_MT_POSITION_Y : ABS_Y);
 
-    if (!device->x.valid || !device->y.valid || device->x.maximum <= device->x.minimum ||
-        device->y.maximum <= device->y.minimum) {
+    if (!x.valid || !y.valid || x.maximum <= x.minimum || y.maximum <= y.minimum) {
         LogFormat(LogLevel::Debug,
                   L"Input: \"%hs\" has no usable absolute range; ignored.",
                   path.c_str());
@@ -138,10 +134,14 @@ bool EvdevInput::OpenDevice(const std::string& path, DigitizerDevices devices) {
         return false;
     }
 
+    device->decoder =
+        evdev::Decoder(evdev::AxisRange{x.minimum, x.maximum},
+                       evdev::AxisRange{y.minimum, y.maximum});
+
     LogFormat(LogLevel::Info, L"Input: \"%hs\" %ls (X %d..%d, Y %d..%d, %ls).",
               device->name.c_str(), isDirect ? L"touchscreen" : L"touchpad",
-              device->x.minimum, device->x.maximum, device->y.minimum,
-              device->y.maximum, hasMulti ? L"multitouch" : L"single touch");
+              x.minimum, x.maximum, y.minimum, y.maximum,
+              hasMulti ? L"multitouch" : L"single touch");
 
     devices_.push_back(std::move(device));
     return true;
@@ -236,40 +236,6 @@ void EvdevInput::HandleReadable() {
         for (std::size_t index = 0; index < count; ++index) {
             const input_event& event = events[index];
 
-            if (event.type == EV_ABS) {
-                switch (event.code) {
-                case ABS_MT_SLOT:
-                    if (event.value >= 0 && event.value < kMaxSlots) {
-                        device.slot = event.value;
-                    }
-                    break;
-                case ABS_MT_POSITION_X:
-                    device.slots[device.slot].x = event.value;
-                    device.slots[device.slot].active = true;
-                    break;
-                case ABS_MT_POSITION_Y:
-                    device.slots[device.slot].y = event.value;
-                    device.slots[device.slot].active = true;
-                    break;
-                case ABS_MT_TRACKING_ID:
-                    if (event.value < 0) {
-                        device.slots[device.slot] = Device::Slot{};
-                    } else {
-                        device.slots[device.slot].active = true;
-                    }
-                    break;
-                case ABS_X:
-                    device.currentX = event.value;
-                    break;
-                case ABS_Y:
-                    device.currentY = event.value;
-                    break;
-                default:
-                    break;
-                }
-                continue;
-            }
-
             if (event.type == EV_KEY && (event.code == BTN_TOUCH ||
                                           event.code == BTN_TOOL_FINGER ||
                                           event.code == BTN_MOUSE)) {
@@ -277,46 +243,21 @@ void EvdevInput::HandleReadable() {
                 continue;
             }
 
-            if (event.type != EV_SYN || event.code != SYN_REPORT) {
+            if (event.type == EV_SYN && event.code == SYN_REPORT) {
+                const evdev::Report report = device.decoder.Commit(device.tipDown);
+                ContactSample sample;
+                sample.contact = report.contact;
+                sample.hasPosition = report.hasPosition;
+                sample.x = report.x;
+                sample.y = report.y;
+                // Every evdev touchpad reports BTN_TOUCH, so a report without a
+                // position is not a release.
+                sample.reportsTipSwitch = true;
+                tracker_.Feed(&device, sample);
                 continue;
             }
 
-            // A complete report: reduce it to one ContactSample.
-            int activeSlots = 0;
-            int slotX = 0;
-            int slotY = 0;
-            for (const Device::Slot& slot : device.slots) {
-                if (slot.active) {
-                    ++activeSlots;
-                    slotX = slot.x;
-                    slotY = slot.y;
-                }
-            }
-
-            hid::Contact contact = hid::Contact::Up;
-            if (activeSlots > 1) {
-                contact = hid::Contact::Multiple;
-            } else if (activeSlots == 1 || device.tipDown) {
-                contact = hid::Contact::Down;
-            }
-
-            const int rawX = activeSlots == 1 ? slotX : device.currentX;
-            const int rawY = activeSlots == 1 ? slotY : device.currentY;
-
-            ContactSample sample;
-            sample.contact = contact;
-            sample.hasPosition = contact == hid::Contact::Down;
-            if (sample.hasPosition) {
-                sample.x = hid::NormalizeValue(rawX, device.x.minimum, device.x.maximum,
-                                               32);
-                // evdev Y grows downward; the engine works bottom-up.
-                sample.y = 1.0f - hid::NormalizeValue(rawY, device.y.minimum,
-                                                      device.y.maximum, 32);
-            }
-            // Every evdev touchpad reports BTN_TOUCH, so a report without a
-            // position is not a release.
-            sample.reportsTipSwitch = true;
-            tracker_.Feed(&device, sample);
+            device.decoder.Input(event.type, event.code, event.value);
         }
     }
 }

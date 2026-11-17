@@ -107,9 +107,10 @@ version block, the user-visible strings and the settings dialog template are
 compiled from `src/Resources.rc`; the embedded manifest (PerMonitorV2 DPI
 awareness, long paths, `asInvoker`) comes from `src/app.manifest`.
 
-Five self-contained test binaries ship with the project; the gesture engine,
-the HID decoding helpers, the contact lifecycle, the configuration parser and
-the path helpers have no Win32 UI dependencies:
+Six self-contained test binaries ship with the project; the gesture engine, the
+HID and evdev decoding helpers, the contact lifecycle, the configuration parser
+and the path helpers have no UI or hardware dependencies, so they build and run
+identically on Windows, macOS and Linux:
 
 ```powershell
 ctest --test-dir build -C Release --output-on-failure
@@ -120,6 +121,7 @@ ctest --test-dir build -C Release --output-on-failure
 | `gesture_engine` | Zone selection, latching, absolute sliders, media steps, taps, cooldown, clamps, inversion |
 | `hid_decode` | Sign extension, logical-range normalization, contact-state combination |
 | `contact_tracker` | Down/move/up, multi-finger cancel, blocked-until-release, device removal |
+| `evdev_decode` | Linux multitouch slots, absolute axes, y flip, multi-finger reports |
 | `config` | Defaults, clamping, malformed values, legacy-schema migration, UTF-16 files, save round-trip |
 | `path_compare` | Path identity and timestamp comparison used by the installer handover |
 

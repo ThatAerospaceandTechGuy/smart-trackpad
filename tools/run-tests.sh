@@ -14,7 +14,7 @@ status=0
 build() {
     name=$1
     shift
-    command="$cxx $flags -I'$root/src' -I'$root/src/common'"
+    command="$cxx $flags -I'$root/src' -I'$root/src/common' -I'$root/src/linux'"
     for file in "$@"; do
         command="$command '$root/$file'"
     done
@@ -26,10 +26,12 @@ build gesture_engine src/common/GestureEngine.cpp tests/GestureEngineTests.cpp
 build hid_decode src/common/HidDecode.cpp tests/HidDecodeTests.cpp
 build path_compare src/common/PathCompare.cpp tests/PathCompareTests.cpp
 build contact_tracker src/common/ContactTracker.cpp tests/ContactTrackerTests.cpp
+build evdev_decode src/linux/EvdevDecode.cpp src/common/HidDecode.cpp \
+    tests/EvdevDecodeTests.cpp
 build config src/common/Config.cpp src/common/IniFile.cpp src/common/Log.cpp \
     src/common/Platform.cpp src/common/Text.cpp tests/ConfigTests.cpp
 
-for name in gesture_engine hid_decode path_compare contact_tracker config; do
+for name in gesture_engine hid_decode path_compare contact_tracker evdev_decode config; do
     printf '%-18s' "$name"
     if "$out/$name" >"$out/$name.log" 2>&1; then
         echo "ok"

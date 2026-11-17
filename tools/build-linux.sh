@@ -16,7 +16,7 @@ src/common/PathCompare.cpp src/common/Platform.cpp src/common/Text.cpp"
 
 linux="src/linux/AppLinux.cpp src/linux/AudioLinux.cpp
 src/linux/BrightnessLinux.cpp src/linux/ConfigWatcherLinux.cpp
-src/linux/InputEvdev.cpp src/linux/OsdLinux.cpp src/linux/ZoneTestLinux.cpp
+src/linux/EvdevDecode.cpp src/linux/InputEvdev.cpp src/linux/OsdLinux.cpp src/linux/ZoneTestLinux.cpp
 src/linux/main.cpp"
 
 cxx=${CXX:-g++}
