@@ -8,8 +8,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    name: ${{ matrix.config }} build and tests
+  windows:
+    name: Windows ${{ matrix.config }}
     runs-on: windows-latest
     strategy:
       fail-fast: false
@@ -32,43 +32,96 @@ jobs:
         if: matrix.config == 'Release'
         uses: actions/upload-artifact@v4
         with:
-          name: SmartTrackpad-${{ github.sha }}
+          name: SmartTrackpad-windows-${{ github.sha }}
           path: build/Release/SmartTrackpad.exe
           if-no-files-found: error
 
+  linux:
+    name: Linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # apt needs no build step of its own: the CMake target is the source of truth.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake libx11-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Portable compiler-only build
+        run: sh tools/build-linux.sh build-portable
+
+      - name: Upload the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartTrackpad-linux-${{ github.sha }}
+          path: build/smarttrackpad
+          if-no-files-found: error
+
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Upload the application
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartTrackpad-macos-${{ github.sha }}
+          path: build/SmartTrackpad.app
+          if-no-files-found: error
+
   release:
-    name: Publish release asset
+    name: Publish release assets
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: build
-    runs-on: windows-latest
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Configure
-        run: cmake -S . -B build -A x64
-
-      - name: Build
-        run: cmake --build build --config Release --parallel
-
-      - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
 
       - name: Package
-        shell: pwsh
         run: |
-          $version = (Select-String -Path CMakeLists.txt -Pattern 'VERSION ([\d.]+)' |
-            Select-Object -First 1).Matches[0].Groups[1].Value
-          $staging = "staging/SmartTrackpad-$version"
-          New-Item -ItemType Directory -Path $staging -Force | Out-Null
-          Copy-Item build/Release/SmartTrackpad.exe $staging
-          Copy-Item README.md, LICENSE, CHANGELOG.md $staging
-          Compress-Archive -Path $staging -DestinationPath "SmartTrackpad-$version.zip"
+          version=$(sed -n 's/^project(SmartTrackpad VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          mkdir -p dist
+          for platform in windows linux macos; do
+            src="artifacts/SmartTrackpad-$platform-${GITHUB_SHA}"
+            if [ -d "$src" ]; then
+              mkdir -p "staging/SmartTrackpad-$version-$platform"
+              cp -R "$src"/. "staging/SmartTrackpad-$version-$platform/"
+              cp README.md LICENSE CHANGELOG.md "staging/SmartTrackpad-$version-$platform/"
+              (cd staging && zip -qr "../dist/SmartTrackpad-$version-$platform.zip" \
+                 "SmartTrackpad-$version-$platform")
+            fi
+          done
+          ls -l dist
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
         with:
-          files: SmartTrackpad-*.zip
+          files: dist/SmartTrackpad-*.zip
           generate_release_notes: true

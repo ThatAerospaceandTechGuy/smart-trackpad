@@ -2,12 +2,9 @@
 
 #include <memory>
 
-namespace st {
+#include "OsdKind.h"
 
-enum class OsdKind {
-    Volume,
-    Brightness,
-};
+namespace st {
 
 // A small, click-through, topmost overlay that mirrors the Windows 11
 // hardware indicator. It is intentionally application-drawn: Windows exposes

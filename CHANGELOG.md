@@ -3,6 +3,33 @@
 All notable changes to Smart Trackpad are documented here.  The project follows
 [Semantic Versioning](https://semver.org/).
 
+## [1.3.0]
+
+### Added
+
+- **macOS** port: menu bar item, multitouch input (private
+  `MultitouchSupport`), Core Audio volume, `DisplayServices` brightness, AppKit
+  overlay, LaunchAgent login item, `--settings` / `--zone-test` / `--uninstall`.
+- **Linux** port: evdev absolute/multitouch input, PipeWire or PulseAudio volume,
+  `/sys/class/backlight` brightness with a `brightnessctl` fallback, X11 overlay,
+  XDG autostart, `--settings` / `--zone-test` / `--uninstall`, and a
+  `--zone-test` live contact dump.
+- CI matrix for Windows, Linux and macOS; `tools/build-linux.sh` and
+  `tools/run-tests.sh` build and test with only a compiler.
+- Portable crash handler for macOS/Linux (backtrace to the log and stderr).
+
+### Changed
+
+- The repository is split into `src/common` (portable core and tests),
+  `src/windows`, `src/macos` and `src/linux`.  `GestureEngine`,
+  `ContactTracker`, the configuration schema and the test binaries are shared by
+  all three platforms.
+- The configuration is read by a portable INI parser instead of
+  `GetPrivateProfileStringW`, and is written as UTF-8 with a BOM.  UTF-16 files
+  from earlier releases are still read.
+- `ConfigWatcher` is per platform (`ReadDirectoryChangesW`, `inotify`, `kqueue`)
+  and the INI cache now notices outside edits by size and modification time.
+
 ## [1.2.0]
 
 ### Added

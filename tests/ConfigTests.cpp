@@ -1,6 +1,6 @@
 #include "Config.h"
-
-#include <windows.h>
+#include "IniFile.h"
+#include "Text.h"
 
 #include <cmath>
 #include <filesystem>
@@ -10,6 +10,18 @@
 #include <system_error>
 
 namespace {
+
+#if defined(_WIN32)
+#include <windows.h>
+int GetProcessIdHint() {
+    return static_cast<int>(GetCurrentProcessId());
+}
+#else
+#include <unistd.h>
+int GetProcessIdHint() {
+    return static_cast<int>(getpid());
+}
+#endif
 
 int g_failures = 0;
 
@@ -26,34 +38,30 @@ bool NearlyEqual(float left, float right) {
     return std::fabs(left - right) < 1e-4f;
 }
 
-// The configuration format is UTF-16 with a BOM so GetPrivateProfile* reads it.
+// Tests write plain UTF-8; another test covers the UTF-16 files older
+// releases produced.
 void WriteIni(const std::filesystem::path& path, const std::wstring& text) {
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    const unsigned char bom[] = {0xFF, 0xFE};
-    file.write(reinterpret_cast<const char*>(bom), sizeof(bom));
-    file.write(reinterpret_cast<const char*>(text.data()),
-               static_cast<std::streamsize>(text.size() * sizeof(wchar_t)));
+    const std::string utf8 = st::text::ToUtf8(text);
+    file.write(utf8.data(), static_cast<std::streamsize>(utf8.size()));
 }
 
 bool HasSection(const std::filesystem::path& path, const wchar_t* section) {
-    wchar_t buffer[16]{};
-    return GetPrivateProfileStringW(section, nullptr, L"", buffer,
-                                    static_cast<DWORD>(std::size(buffer)),
-                                    path.c_str()) > 0;
+    return st::HasProfileSection(section, path);
 }
 
 class TempDirectory {
 public:
     TempDirectory() {
-        wchar_t buffer[MAX_PATH]{};
-        const DWORD length = GetTempPathW(static_cast<DWORD>(std::size(buffer)), buffer);
-        std::wstring path(buffer, length);
-        path += L"SmartTrackpadTests-";
-        path += std::to_wstring(GetCurrentProcessId());
-        path += L"-";
-        path += std::to_wstring(GetTickCount64());
-        directory_ = path;
+        static int counter = 0;
         std::error_code error;
+        std::filesystem::path path =
+            std::filesystem::temp_directory_path(error) / "SmartTrackpadTests";
+        if (error) {
+            path = "SmartTrackpadTests";
+        }
+        path /= std::to_string(++counter) + "-" + std::to_string(GetProcessIdHint());
+        directory_ = path;
         std::filesystem::create_directories(directory_, error);
     }
 
@@ -316,6 +324,30 @@ max_volume=10
     CHECK(config.gestures.maxVolumePercent == 90);
 }
 
+void TestLegacyUtf16FileIsRead() {
+    TempDirectory temp;
+    const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
+
+    // Releases up to 1.2.0 wrote UTF-16 LE with a BOM.  Such a file must still
+    // be understood (and is rewritten as UTF-8 on the next save).
+    const std::wstring text = L"[zones]\ntop_height=7\nenable_top=1\n";
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        const unsigned char bom[] = {0xFF, 0xFE};
+        file.write(reinterpret_cast<const char*>(bom), sizeof(bom));
+        for (const wchar_t character : text) {
+            const unsigned char bytes[] = {
+                static_cast<unsigned char>(character & 0xFF),
+                static_cast<unsigned char>((character >> 8) & 0xFF)};
+            file.write(reinterpret_cast<const char*>(bytes), sizeof(bytes));
+        }
+    }
+
+    const st::AppConfig config = st::LoadConfig(path);
+    CHECK(NearlyEqual(config.gestures.topBand, 0.07f));
+    CHECK(config.gestures.topEnabled);
+}
+
 void TestRightEdgeCanBeEnabled() {
     TempDirectory temp;
     const std::filesystem::path path = temp.File(L"SmartTrackpad.ini");
@@ -390,6 +422,7 @@ int main() {
     RUN_TEST(TestMalformedValuesFallBackToDefaults);
     RUN_TEST(TestNewSectionsAreParsed);
     RUN_TEST(TestInvertedSafetyRangeIsSwapped);
+    RUN_TEST(TestLegacyUtf16FileIsRead);
     RUN_TEST(TestRightEdgeCanBeEnabled);
     RUN_TEST(TestSaveConfigRoundTrip);
 

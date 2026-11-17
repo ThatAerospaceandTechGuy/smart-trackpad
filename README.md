@@ -1,7 +1,14 @@
 # Smart Trackpad
 
-A small, event-driven Windows background utility that turns the edges of a
-Windows touchpad into hardware controls:
+A small, event-driven background utility that turns the edges of a touchpad into
+hardware controls.  It runs on **Windows**, **macOS** and **Linux** from one
+shared gesture engine, one configuration file format and one set of tests.
+
+| Platform | Input | Volume | Brightness | Overlay | Menu |
+| --- | --- | --- | --- | --- | --- |
+| Windows 10/11 | Raw Input HID digitizer | Core Audio | DDC/CI + WMI | GDI+ card | tray icon |
+| macOS 12+ | MultitouchSupport (private) | Core Audio | DisplayServices (private) | AppKit panel | menu bar item |
+| Linux (X11/Wayland) | evdev absolute axes | PipeWire/PulseAudio | `/sys/class/backlight` | X11 card | CLI + config file |
 
 | Zone | Gesture | Action |
 | --- | --- | --- |
@@ -65,12 +72,29 @@ refused the write.
 
 ## Build
 
-Requirements: Windows 10/11, Visual Studio 2022+ (Desktop development with
-C++), CMake 3.21+.
+Requirements: CMake 3.21+ and one of
+
+* **Windows**: Visual Studio 2022+ with "Desktop development with C++".
+* **macOS**: Xcode command line tools (Xcode 15+).
+* **Linux**: g++/clang++ and `libx11-dev` (without X11 the overlay is compiled
+  out and only the level changes happen).
 
 ```powershell
+# Windows
 cmake -S . -B build -G "Visual Studio 18 2026" -A x64
 cmake --build build --config Release
+```
+
+```sh
+# macOS: build/SmartTrackpad.app
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+
+# Linux: build/smarttrackpad
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+# ...or with nothing but a compiler:
+sh tools/build-linux.sh && sh tools/run-tests.sh
 ```
 
 The executable is `build\Release\SmartTrackpad.exe`. It is a `WIN32` GUI
@@ -96,11 +120,13 @@ ctest --test-dir build -C Release --output-on-failure
 | `gesture_engine` | Zone selection, latching, absolute sliders, media steps, taps, cooldown, clamps, inversion |
 | `hid_decode` | Sign extension, logical-range normalization, contact-state combination |
 | `contact_tracker` | Down/move/up, multi-finger cancel, blocked-until-release, device removal |
-| `config` | Defaults, clamping, malformed values, legacy-schema migration, save round-trip |
+| `config` | Defaults, clamping, malformed values, legacy-schema migration, UTF-16 files, save round-trip |
 | `path_compare` | Path identity and timestamp comparison used by the installer handover |
 
-`.github/workflows/build.yml` builds Debug and Release and runs the tests on
-every push, and publishes a zip on version tags.
+`.github/workflows/build.yml` builds Windows (Debug and Release), Linux and
+macOS, runs the tests on all three, and publishes a zip per platform on version
+tags.  `tools/build-linux.sh` and `tools/run-tests.sh` do the same thing with
+nothing but a compiler, which is how the Linux port was verified here.
 
 ## Run
 
@@ -136,19 +162,77 @@ If the Startup folder contains another shortcut that launches a different
 `SmartTrackpad.exe` - an old copy in `Downloads`, for example - it is logged and
 removed, so signing in always starts the managed copy once.
 
+### macOS
+
+Open `build/SmartTrackpad.app` (or copy it to `/Applications`).  The program has
+no Dock icon (`LSUIElement`); its menu bar glyph `◧` holds the menu:
+
+* **Edge gestures** - enable/disable without quitting.
+* **Reload configuration**, **Edit configuration…** (opens the INI in your
+  default editor), **Open data folder**, **Open log**.
+* **Start at login** - writes or removes
+  `~/Library/LaunchAgents/dev.smarttrackpad.app.plist`.
+* **About**, **Quit**.
+
+Data lives in `~/Library/Application Support/SmartTrackpad/`.
+
+```sh
+SmartTrackpad.app/Contents/MacOS/SmartTrackpad --settings   # open the INI
+SmartTrackpad.app/Contents/MacOS/SmartTrackpad --version
+```
+
+The first launch of a locally built app is blocked by Gatekeeper: use
+*System Settings → Privacy & Security → Open Anyway*, or `xattr -d
+com.apple.quarantine` on the bundle.  The input and brightness backends use
+Apple's private frameworks, so the app cannot be distributed through the App
+Store and will need re-verification after a major macOS release.
+
+### Linux
+
+```sh
+./build/smarttrackpad              # systemd/autostart friendly, logs to the file
+./build/smarttrackpad --zone-test  # live contact dump, Ctrl+C to stop
+./build/smarttrackpad --settings   # open the INI in $VISUAL/$EDITOR
+./build/smarttrackpad --uninstall  # remove the autostart entry
+```
+
+Data lives in `${XDG_DATA_HOME:-~/.local/share}/SmartTrackpad/`.  There is no
+tray icon (that would add a GTK/SNI dependency): the configuration file is the
+interface, and `--zone-test` is the diagnostic.
+
+Running it at login is a normal XDG autostart entry,
+`~/.config/autostart/smarttrackpad.desktop`, created when
+`[general] start_with_windows=1`.
+
+**Permissions.** Reading absolute touch coordinates needs access to
+`/dev/input/event*`; add yourself to the `input` group
+(`sudo usermod -aG input "$USER"`, then sign out and in).  Writing panel
+brightness needs either a udev rule for `/sys/class/backlight/*/brightness` or
+`brightnessctl` installed; the program detects both and logs which one it uses.
+Volume goes through `wpctl` (PipeWire) or `pactl` (PulseAudio), whichever exists.
+
+On a Wayland session the overlay is unavailable (there is no X11 display) and
+the log says so; the volume and brightness changes still happen.
+
 ## Configuration
 
 Created on first launch at:
 
 ```
-%LOCALAPPDATA%\SmartTrackpad\SmartTrackpad.ini
+Windows  %LOCALAPPDATA%\SmartTrackpad\SmartTrackpad.ini
+macOS    ~/Library/Application Support/SmartTrackpad/SmartTrackpad.ini
+Linux    ${XDG_DATA_HOME:-~/.local/share}/SmartTrackpad/SmartTrackpad.ini
 ```
 
-Log file: `%LOCALAPPDATA%\SmartTrackpad\smarttrackpad.log` (rotated to
-`smarttrackpad.log.old` as soon as it passes 1 MiB, while running). A crash
-writes a `crash-<timestamp>.dmp` minidump next to the log.
-If `LOCALAPPDATA` is unavailable, everything lives under a `SmartTrackpad`
-folder next to the executable.
+Log file: `smarttrackpad.log` in the same folder (rotated to
+`smarttrackpad.log.old` as soon as it passes 1 MiB, while running). A crash on
+Windows writes a `crash-<timestamp>.dmp` minidump next to the log; on macOS and
+Linux the backtrace goes to the log and to stderr.
+If the platform's data directory is unavailable, everything lives under a
+`SmartTrackpad` folder next to the executable.
+
+The file is UTF-8 with a BOM; UTF-16 files written by releases before 1.3.0 are
+still read and are rewritten on the next save.
 
 ```ini
 [zones]
@@ -185,7 +269,7 @@ debug=0                ; verbose HID/action diagnostics in the log
 show_percentage=1      ; 0 = icon and level bar only
 
 [general]
-start_with_windows=1
+start_with_windows=1   ; Windows: Startup shortcut, macOS: LaunchAgent, Linux: XDG autostart
 config_version=2
 ```
 
@@ -208,9 +292,18 @@ current behaviour.
 ## Implementation
 
 ```
-WM_INPUT  ->  RawInputSource  ->  ContactTracker  ->  GestureEngine  ->  ActionDispatcher
-              (HID parsing)      (one contact)       (zone logic)       (Core Audio / DDC-WMI / keys)
+Windows: WM_INPUT  ->  RawInputSource  --macOS:   MT callback -> MultitouchInput --+->  ContactTracker  ->  GestureEngine  ->  platform actions
+Linux:   evdev read  ->  EvdevInput    --/        (one contact)      (zone logic)
 ```
+
+`src/common` holds everything that is not platform specific: `GestureEngine`,
+`ContactTracker`, the configuration schema and INI parser, the absolute-value
+helpers (`HidDecode`), logging, path rules and the per-user data locations.
+`src/windows`, `src/macos` and `src/linux` hold the backends.  The five test
+binaries link only `src/common`, so the behaviour is identical everywhere and
+verified without hardware.
+
+### Windows backends
 
 * **`App`** creates the required hidden message-only window (`HWND_MESSAGE`)
   and runs a single `GetMessage` loop. There is no polling: input arrives as
@@ -281,12 +374,70 @@ WM_INPUT  ->  RawInputSource  ->  ContactTracker  ->  GestureEngine  ->  ActionD
   `OutputDebugString`) with a non-blocking variant for crash paths; debug logs
   are gated by the `debug` setting.
 
+### macOS backends
+
+* **`MultitouchInput`** loads the private `MultitouchSupport.framework` with
+  `dlopen`, registers a contact-frame callback on the default device and maps
+  the finger states to the same `ContactSample` the Windows path produces.  If
+  the framework is missing or its symbols changed, the program logs why and
+  keeps running without gestures.
+* **`CoreAudioVolume`** reads and writes the default output device with
+  `kAudioDevicePropertyVolumeScalar` / `kAudioDevicePropertyMute` (falling back
+  to per-channel elements, then to an emulated mute by zeroing the level).
+* **`MacBrightness`** uses `DisplayServicesGetBrightness` /
+  `DisplayServicesSetBrightness` from the private `DisplayServices.framework`
+  and reports whether the main display is the built-in panel, which is what
+  `[display] brightness_targets` uses.
+* **`OverlayMac`** is an `NSPanel` with a custom `NSView` drawing the same card,
+  bar and value; updates are marshalled to the main queue and the panel hides
+  itself after two seconds.
+* **Menu bar item** (`NSStatusItem`) replaces the tray icon,
+  `LoginItemMac` writes a LaunchAgent for "Start at login", and
+  `ConfigWatcherMac` watches the configuration with `kqueue`.
+
+### Linux backends
+
+* **`EvdevInput`** scans `/dev/input/event*`, keeps the devices with absolute
+  `ABS_X/ABS_Y` or multitouch slots, uses `EVIOCGPROP` to tell a touchpad
+  (indirect) from a touchscreen (direct), and decodes one `SYN_REPORT` at a
+  time.  `[input] devices` selects which kind is accepted.  Nothing is polled:
+  the event loop `poll()`s the device descriptors.
+* **`LinuxVolumeController`** drives `wpctl` (PipeWire) or `pactl`
+  (PulseAudio) from a worker thread that coalesces requests, and reads the level
+  back for the overlay.
+* **`LinuxBrightnessController`** writes `/sys/class/backlight/*/brightness`
+  and falls back to `brightnessctl` when the node is not writable.
+* **`X11Overlay`** is an override-redirect X11 window with the same card and
+  bar; on a Wayland-only session it stays disabled and logs that once.
+* **`--settings` / `--zone-test`** open the INI in `$VISUAL`/`$EDITOR` and print
+  live contact positions, and `LinuxApp` installs an XDG autostart entry.
+
 RAII is used for the raw input registration, device preparsed buffers,
 physical monitor handles, COM/Core Audio interfaces, the single-instance
-mutex, the controllers' worker threads, the watcher and the tray icon. No
-network access and no third-party dependencies.
+mutex, the controllers' worker threads, the watcher, the tray icon and the X11
+display. No network access and no third-party libraries: the audio and
+brightness helpers on Linux call the tools that are already installed, and
+everything else is a system framework.
 
 ## Platform notes and limitations
+
+### Build status of this port
+
+* **Windows** - built, unit tested and exercised on real hardware (the
+  development laptop): volume, brightness, overlay, tray menu, settings dialog,
+  zone test window, install handover, log rotation, live reload.
+* **Linux** - built and unit tested (g++ 15, Ubuntu, WSL) and smoke tested
+  (`--help`, `--version`, `--zone-test`, config creation, log output).  The evdev
+  reader, `wpctl`/`pactl` calls and sysfs brightness writes follow the documented
+  kernel/desktop interfaces but were not run against a physical touchpad in this
+  environment (a VM has none).
+* **macOS** - written against the documented and reverse-engineered interfaces
+  (`MultitouchSupport`, `DisplayServices`, Core Audio, AppKit) and reviewed, but
+  **not compiled or run here**: no Mac was available.  Expect to fix small
+  compile errors on the first build; the file layout and the shared engine make
+  that a mechanical exercise rather than a redesign.
+
+### General
 
 * **Absolute contact data is required.** Coordinate zones only work when the
   touchpad exposes an absolute HID digitizer collection via Raw Input. Many
@@ -321,9 +472,17 @@ network access and no third-party dependencies.
   suspended while the session is locked.
 * **Single contact only.** Two-finger fine adjustment is not implemented; a
   second finger always cancels the gesture.
-* **Not verified against a live edge swipe everywhere.** The build and unit
-  tests run locally, and the Core Audio volume, WMI/DDC-CI brightness setters,
-  overlay, settings dialog and zone test window were exercised on the
-  development laptop; actual touchpad reports still depend on the HID
-  descriptor supplied by the device. Enable `debug=1` and inspect the log to see
-  detected devices, usage pages, X/Y ranges, reloads, and the backends in use.
+* **macOS uses private frameworks.** `MultitouchSupport` and `DisplayServices`
+  are not public API: they can change with any macOS release, and the app cannot
+  be sandboxed or shipped through the App Store. Nothing is installed in a
+  system location, but a future macOS version may require updating the resolved
+  symbols.
+* **Linux brightness needs privileges.** Writing
+  `/sys/class/backlight/*/brightness` requires a udev rule or `brightnessctl`.
+  DDC/CI monitors are not driven on Linux (that needs the i2c device nodes and a
+  protocol implementation); on macOS and Windows external monitors are covered
+  by DDC/CI.
+* **Not verified against a live edge swipe everywhere.** Windows was exercised
+  on the development laptop; the macOS and Linux input paths need a run on the
+  target hardware. Enable `debug=1` and inspect the log (or use `--zone-test` on
+  Linux) to see detected devices, ranges, reloads and the backends in use.

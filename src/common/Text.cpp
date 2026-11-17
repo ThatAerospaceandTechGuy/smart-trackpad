@@ -113,6 +113,14 @@ std::string ToUtf8(std::wstring_view wide) {
     return result;
 }
 
+std::wstring PathToWide(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    return path.wstring();
+#else
+    return ToWide(path.string());
+#endif
+}
+
 std::wstring LowerAscii(std::wstring_view value) {
     std::wstring result(value);
     for (wchar_t& character : result) {

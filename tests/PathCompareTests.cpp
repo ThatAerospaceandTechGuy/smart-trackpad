@@ -1,7 +1,5 @@
 #include "PathCompare.h"
 
-#include <windows.h>
-
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -10,6 +8,18 @@
 #include <system_error>
 
 namespace {
+
+#if defined(_WIN32)
+#include <windows.h>
+int GetProcessIdHint() {
+    return static_cast<int>(GetCurrentProcessId());
+}
+#else
+#include <unistd.h>
+int GetProcessIdHint() {
+    return static_cast<int>(getpid());
+}
+#endif
 
 int g_failures = 0;
 
@@ -25,13 +35,15 @@ int g_failures = 0;
 class TempDirectory {
 public:
     TempDirectory() {
-        wchar_t buffer[MAX_PATH]{};
-        const DWORD length = GetTempPathW(static_cast<DWORD>(std::size(buffer)), buffer);
-        std::wstring path(buffer, length);
-        path += L"SmartTrackpadPathTests-";
-        path += std::to_wstring(GetCurrentProcessId());
-        directory_ = path;
+        static int counter = 0;
         std::error_code error;
+        std::filesystem::path path =
+            std::filesystem::temp_directory_path(error) / "SmartTrackpadTests";
+        if (error) {
+            path = "SmartTrackpadTests";
+        }
+        path /= std::to_string(++counter) + "-" + std::to_string(GetProcessIdHint());
+        directory_ = path;
         std::filesystem::create_directories(directory_, error);
     }
 
@@ -54,7 +66,14 @@ void WriteFile(const std::filesystem::path& path) {
 }
 
 void TestSamePathLexical() {
+#if defined(_WIN32)
+    // Windows paths are case-insensitive.
     CHECK(st::SamePath(L"C:/Temp/App/app.exe", LR"(c:\temp\app\APP.EXE)"));
+#else
+    // POSIX paths are case-sensitive, so a different case is a
+    // different file.
+    CHECK(!st::SamePath(L"C:/Temp/App/app.exe", L"C:/Temp/App/APP.EXE"));
+#endif
     CHECK(st::SamePath(L"C:/Temp/App/app.exe", L"C:/Temp/App/./app.exe"));
     CHECK(!st::SamePath(L"C:/Temp/App/app.exe", L"C:/Temp/Other/app.exe"));
 }
